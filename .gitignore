@@ -59,5 +59,11 @@ src/rendering/vc140.pdb
 enc_temp_folder/
 
 BetterVR.zip
+BetterVR_log.txt
+
+# Nix build result symlinks and editor backups
+/result
+/result-*
+*~
 
 compile_commands.json

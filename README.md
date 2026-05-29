@@ -25,7 +25,7 @@ While more integrated solutions are being found out, there's probably ways to se
 
 * A legal copy of BotW for the Wii U.
 
-* Windows OS. [It doesn't work under Linux (even with Wine/Proton) for now](https://github.com/Crementif/BotW-BetterVR/issues/18).
+* Windows OS for the stable release. A native Linux Vulkan/OpenXR beta is in progress; see [Linux Beta Setup](LINUX_BETA_SETUP.md).
 
 * A properly set up [Cemu](http://cemu.info/) emulator that's able to run at 60FPS or higher. See [this guide](https://cemu.cfw.guide/) for more info.
   * **Before reporting issues, make sure that you have a WORKING version of the game that can go in-game on your PC before you install this mod!**  
