@@ -1,4 +1,5 @@
 #include "pch.h"
+#ifdef _WIN32
 
 #include "vulkan.h"
 #include "hooking/cemu_hooks.h"
@@ -690,3 +691,5 @@ void RND_Renderer::ImGuiOverlay::DrawAndCopyToImage(VkCommandBuffer cb, VkImage 
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
 }
+
+#endif // _WIN32

@@ -1,5 +1,7 @@
 #pragma once
 
+#ifdef _WIN32
+
 #include "openxr.h"
 #include "texture.h"
 #include "utils/render_utils.h"
@@ -181,3 +183,5 @@ private:
     HANDLE m_fenceEvent = nullptr;
     uint64_t m_nextFenceValue = 1;
 };
+
+#endif // _WIN32

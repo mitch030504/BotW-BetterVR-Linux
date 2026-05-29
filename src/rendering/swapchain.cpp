@@ -1,4 +1,5 @@
 #include "swapchain.h"
+#ifdef _WIN32
 #include "utils/d3d12_utils.h"
 #include "instance.h"
 
@@ -79,3 +80,5 @@ Swapchain<T>::~Swapchain() {
 
 template class Swapchain<DXGI_FORMAT_D32_FLOAT>;
 template class Swapchain<DXGI_FORMAT_R8G8B8A8_UNORM_SRGB>;
+
+#endif // _WIN32

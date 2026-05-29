@@ -1,5 +1,7 @@
 #pragma once
 
+#ifdef _WIN32
+
 #ifdef _DEBUG
 #define D3D12_SET_NAME(object, name) do { (object)->SetName(name); } while (0)
 #else
@@ -370,3 +372,5 @@ namespace D3D12Utils {
         }
     }
 }
+
+#endif // _WIN32

@@ -68,6 +68,8 @@ private:
     VkFramebuffer m_framebuffer = VK_NULL_HANDLE;
 };
 
+#ifdef _WIN32
+
 class Texture {
 public:
     Texture(uint32_t width, uint32_t height, DXGI_FORMAT format);
@@ -164,3 +166,5 @@ private:
     std::atomic_bool m_activeOperation = false;
     std::atomic<uint64_t> m_fenceCounter{0};  // Monotonically increasing fence value
 };
+
+#endif // _WIN32

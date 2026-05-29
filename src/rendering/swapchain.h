@@ -1,5 +1,7 @@
 #pragma once
 
+#ifdef _WIN32
+
 template <DXGI_FORMAT T>
 class Swapchain {
 public:
@@ -26,3 +28,5 @@ private:
     std::vector<ComPtr<ID3D12Resource>> m_swapchainTextures;
     uint32_t m_swapchainImageIdx = 0;
 };
+
+#endif // _WIN32

@@ -1,3 +1,5 @@
+#ifdef _WIN32
+
 constexpr char presentDepthHLSL[] = R"hlsl(
 struct VSInput {
     uint instId : SV_InstanceID;
@@ -210,3 +212,5 @@ constexpr unsigned short screenIndices[] = {
     2, 1, 3,
 };
 // clang-format on
+
+#endif // _WIN32

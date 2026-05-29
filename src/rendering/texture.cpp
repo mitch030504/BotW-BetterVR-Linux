@@ -1,7 +1,9 @@
 #include "texture.h"
 #include "instance.h"
-#include "utils/d3d12_utils.h"
 #include "utils/vulkan_utils.h"
+#ifdef _WIN32
+#include "utils/d3d12_utils.h"
+#endif
 
 
 BaseVulkanTexture::~BaseVulkanTexture() {
@@ -290,6 +292,7 @@ VulkanFramebuffer::~VulkanFramebuffer() {
         VRManager::instance().VK->GetDeviceDispatch()->DestroyFramebuffer(VRManager::instance().VK->GetDevice(), m_framebuffer, nullptr);
 }
 
+#ifdef _WIN32
 Texture::Texture(uint32_t width, uint32_t height, DXGI_FORMAT format): m_d3d12Format(format) {
     // use D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS to disable compression
     D3D12_RESOURCE_FLAGS flags = D3D12Utils::IsDepthFormat(format)
@@ -517,3 +520,5 @@ void SharedTexture::CopyFromVkImage(VkCommandBuffer cmdBuffer, VkImage srcImage)
     dispatch->CmdCopyImage(cmdBuffer, srcImage, VK_IMAGE_LAYOUT_GENERAL, this->m_vkImage, VK_IMAGE_LAYOUT_GENERAL, 1, &copyRegion);
     VulkanUtils::DebugPipelineBarrier(cmdBuffer);
 }
+
+#endif // _WIN32
