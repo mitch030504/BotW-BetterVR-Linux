@@ -78,7 +78,7 @@ static bool BeginStyledTab(const char* label, uint32_t selectedTab, uint32_t tab
 
 static void DrawSectionHeader(const char* label) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
-    ImGui::Text(label);
+    ImGui::Text("%s", label);
     ImGui::PopStyleColor();
 }
 

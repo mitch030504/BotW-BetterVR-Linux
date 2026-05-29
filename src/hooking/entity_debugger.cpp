@@ -322,7 +322,7 @@ void EntityDebugger::DrawEntityInspectorContent() {
 
         for (auto& entity : sortedEntities | std::views::values) {
             std::string id = entity.get().name + "##" + std::to_string(entity.get().values[0].value_address);
-            ImGui::Text(std::format("{}: dist={}", entity.get().name, std::abs(entity.get().priority)).c_str());
+            ImGui::Text("%s", std::format("{}: dist={}", entity.get().name, std::abs(entity.get().priority)).c_str());
             ImGui::PushID(id.c_str());
 
             for (auto& value : entity.get().values) {
@@ -419,7 +419,7 @@ void EntityDebugger::DrawEntityInspectorContent() {
                     }
                     else if constexpr (std::is_same_v<T, std::string>) {
                         std::string val = std::get<std::string>(value.value);
-                        ImGui::Text( val.c_str());
+                        ImGui::Text("%s", val.c_str());
                     }
                 }, value.value);
 
@@ -479,6 +479,7 @@ void EntityDebugger::RemoveEntityValue(uint32_t actorId, const std::string& valu
         }).begin(), it->second.values.end());
     }
 }
+#ifdef _WIN32
 std::array<bool, 256> s_pressedKeyState = {};
 std::array<bool, ImGuiKey_NamedKey_COUNT> s_pressedNamedKeyState = {};
 
@@ -569,3 +570,8 @@ void EntityDebugger::UpdateKeyboardControls() {
         ImGui::GetIO().AddKeyEvent(ImGuiKey_Backspace, false);
     }
 }
+#else // !_WIN32
+void EntityDebugger::UpdateKeyboardControls() {
+    // Keyboard input capture not implemented on Linux
+}
+#endif // _WIN32

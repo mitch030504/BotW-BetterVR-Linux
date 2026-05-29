@@ -23,6 +23,7 @@ struct std::formatter<VkFormat> : std::formatter<string> {
     }
 };
 
+#ifdef _WIN32
 template <>
 struct std::formatter<DXGI_FORMAT> : std::formatter<string> {
     auto format(const DXGI_FORMAT format, std::format_context& ctx) const {
@@ -55,6 +56,7 @@ struct std::formatter<DXGI_FORMAT> : std::formatter<string> {
         }
     }
 };
+#endif
 
 template <>
 struct std::formatter<glm::fmat3> : std::formatter<string> {
@@ -182,6 +184,7 @@ struct std::formatter<LookAtMatrix> : std::formatter<string> {
 };
 
 
+#ifdef _WIN32
 template <>
 struct std::formatter<D3D_FEATURE_LEVEL> : std::formatter<string> {
     auto format(const D3D_FEATURE_LEVEL featureLevel, std::format_context& ctx) const {
@@ -212,6 +215,7 @@ struct std::formatter<D3D_FEATURE_LEVEL> : std::formatter<string> {
         return std::format_to(ctx.out(), "{:X}", std::to_underlying(featureLevel));
     }
 };
+#endif
 
 static std::string FormatDistance(float distance) {
     float distanceInches = distance * 39.3700787f;
@@ -243,7 +247,7 @@ public:
     Log();
     ~Log();
 
-    template <typename LogType L>
+    template <LogType L>
     static inline bool consteval isLogTypeEnabled() {
         if constexpr (L == ERROR) {
             return true;
@@ -271,7 +275,7 @@ public:
         return false;
     }
 
-    template <typename LogType L>
+    template <LogType L>
     static inline void print(const char* message) {
         if constexpr (!isLogTypeEnabled<L>()) {
             return;
@@ -279,26 +283,27 @@ public:
         std::lock_guard<std::mutex> lock(logMutex);
         std::string messageStr = std::string(message) + "\n";
 
-#ifndef _DEBUG
+#if !defined(_WIN32) || !defined(_DEBUG)
         if (logFile.is_open()) {
             logFile << messageStr;
             logFile.flush();
         }
 #endif
 
+#ifdef _WIN32
         DWORD charsWritten = 0;
         WriteConsoleA(consoleHandle, messageStr.c_str(), (DWORD)messageStr.size(), &charsWritten, NULL);
 #ifdef _DEBUG
-        //std::string messageStr = std::string(message) + "\n";
-        //DWORD charsWritten = 0;
-        //WriteConsoleA(consoleHandle, messageStr.c_str(), (DWORD)messageStr.size(), &charsWritten, NULL);
         OutputDebugStringA(messageStr.c_str());
 #else
         std::cout << message << std::endl;
 #endif
+#else
+        fprintf(stderr, "%s", messageStr.c_str());
+#endif
     }
 
-    template <typename LogType L, class... Args>
+    template <LogType L, class... Args>
     static inline void print(const char* format, Args&&... args) {
         if constexpr (!isLogTypeEnabled<L>()) {
             return;
@@ -306,74 +311,72 @@ public:
         Log::print<L>(std::vformat(format, std::make_format_args(args...)).c_str());
     }
 
+#ifdef _WIN32
     static void printTimeElapsed(const char* message_prefix, LARGE_INTEGER time);
+#else
+    static void printTimeElapsed(const char* message_prefix, std::chrono::high_resolution_clock::time_point time);
+#endif
 
 private:
+#ifdef _WIN32
     static HANDLE consoleHandle;
     static double timeFrequency;
+#endif
     static std::ofstream logFile;
     static std::mutex logMutex;
 };
+
+static inline void fatalError [[noreturn]] (const char* errorMessage) {
+#ifdef _DEBUG
+#ifdef _WIN32
+    __debugbreak();
+#else
+    raise(SIGTRAP);
+#endif
+#endif
+#ifdef _WIN32
+    MessageBoxA(NULL, errorMessage, "A fatal error occurred!", MB_OK | MB_ICONERROR);
+#endif
+    throw std::runtime_error(errorMessage);
+}
 
 static void checkXRResult(const XrResult result, const char* errorMessage) {
     if (XR_FAILED(result)) {
         if (errorMessage == nullptr) {
             Log::print<ERROR>("An unknown error (result was {}) has occurred!", result);
-#ifdef _DEBUG
-            __debugbreak();
-#endif
-            MessageBoxA(NULL, std::format("An unknown error {} has occurred which caused a fatal crash!", result).c_str(), "An error occurred!", MB_OK | MB_ICONERROR);
-            throw std::runtime_error("Unidentified error occurred!");
+            fatalError("Unidentified error occurred!");
         }
         else {
             Log::print<ERROR>("Error {}: {}", result, errorMessage);
-#ifdef _DEBUG
-            __debugbreak();
-#endif
-            MessageBoxA(NULL, errorMessage, "A fatal error occurred!", MB_OK | MB_ICONERROR);
-            throw std::runtime_error(errorMessage);
+            fatalError(errorMessage);
         }
     }
 }
 
+#ifdef _WIN32
 static void checkHResult(const HRESULT result, const char* errorMessage) {
     if (FAILED(result)) {
         if (errorMessage == nullptr) {
             Log::print<ERROR>("[Error] An unknown error (result was {}) has occurred!", result);
-#ifdef _DEBUG
-            __debugbreak();
-#endif
-            MessageBoxA(NULL, std::format("An unknown error {} has occurred which caused a fatal crash!", result).c_str(), "A fatal error occurred!", MB_OK | MB_ICONERROR);
-            throw std::runtime_error("Unidentified error occurred!");
+            fatalError("Unidentified error occurred!");
         }
         else {
             Log::print<ERROR>("Error {}: {}", result, errorMessage);
-#ifdef _DEBUG
-            __debugbreak();
-#endif
-            MessageBoxA(NULL, errorMessage, "A fatal error occurred!", MB_OK | MB_ICONERROR);
-            throw std::runtime_error(errorMessage);
+            fatalError(errorMessage);
         }
     }
 }
+#endif
 
 static void checkVkResult(const VkResult result, const char* errorMessage) {
     if (result != VK_SUCCESS) {
         if (errorMessage == nullptr) {
             Log::print<ERROR>("An unknown error (result was {}) has occurred!", (std::underlying_type_t<VkResult>)result);
-#ifdef _DEBUG
-            __debugbreak();
-#endif
-            MessageBoxA(NULL, std::format("An unknown error {} has occurred which caused a fatal crash!", (std::underlying_type_t<VkResult>)result).c_str(), "A fatal error occurred!", MB_OK | MB_ICONERROR);
-            throw std::runtime_error("Unidentified error occurred!");
+            fatalError("Unidentified error occurred!");
         }
         else {
             Log::print<ERROR>("Error {}: {}", (std::underlying_type_t<VkResult>)result, errorMessage);
-#ifdef _DEBUG
-            __debugbreak();
-#endif
-            MessageBoxA(NULL, errorMessage, "A fatal error occurred!", MB_OK | MB_ICONERROR);
-            throw std::runtime_error(errorMessage);
+            fatalError(errorMessage);
         }
     }
 }
@@ -382,19 +385,11 @@ static void checkAssert(const bool assert, const char* errorMessage) {
     if (!assert) {
         if (errorMessage == nullptr) {
             Log::print<ERROR>("Something unexpected happened that prevents further execution!");
-#ifdef _DEBUG
-            __debugbreak();
-#endif
-            MessageBoxA(NULL, "Something unexpected happened that prevents further execution!", "A fatal error occurred!", MB_OK | MB_ICONERROR);
-            throw std::runtime_error("Unexpected assertion occurred!");
+            fatalError("Unexpected assertion occurred!");
         }
         else {
             Log::print<ERROR>("{}", errorMessage);
-#ifdef _DEBUG
-            __debugbreak();
-#endif
-            MessageBoxA(NULL, errorMessage, "A fatal error occurred!", MB_OK | MB_ICONERROR);
-            throw std::runtime_error(errorMessage);
+            fatalError(errorMessage);
         }
     }
 }

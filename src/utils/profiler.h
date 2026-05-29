@@ -257,22 +257,26 @@ private:
     };
 
     struct ThreadSpanState {
-        std::array<ActiveSpan, 64> spans = {};
-        size_t count = 0;
-        uint32_t generation = 0;
+        ThreadSpanState() : spans{}, count(0), generation(0) {}
+        std::array<ActiveSpan, 64> spans;
+        size_t count;
+        uint32_t generation;
     };
 
     struct SectionState {
-        std::atomic<uint64_t> pendingFrameTotalNs = 0;
-        std::atomic<uint32_t> pendingFrameCalls = 0;
-        std::atomic<uint64_t> lastFrameTotalNs = 0;
-        std::atomic<uint64_t> averageFrameTotalNs = 0;
-        std::atomic<uint64_t> maxFrameTotalNs = 0;
-        std::atomic<uint32_t> lastFrameCalls = 0;
-        std::atomic<uint32_t> averageFrameSamples = 0;
-        std::atomic<uint64_t> lastCallNs = 0;
-        std::atomic<uint64_t> maxCallNs = 0;
-        std::atomic<uint64_t> activeSpanStartNs = 0;
+        SectionState() : pendingFrameTotalNs(0), pendingFrameCalls(0), lastFrameTotalNs(0),
+            averageFrameTotalNs(0), maxFrameTotalNs(0), lastFrameCalls(0),
+            averageFrameSamples(0), lastCallNs(0), maxCallNs(0), activeSpanStartNs(0) {}
+        std::atomic<uint64_t> pendingFrameTotalNs;
+        std::atomic<uint32_t> pendingFrameCalls;
+        std::atomic<uint64_t> lastFrameTotalNs;
+        std::atomic<uint64_t> averageFrameTotalNs;
+        std::atomic<uint64_t> maxFrameTotalNs;
+        std::atomic<uint32_t> lastFrameCalls;
+        std::atomic<uint32_t> averageFrameSamples;
+        std::atomic<uint64_t> lastCallNs;
+        std::atomic<uint64_t> maxCallNs;
+        std::atomic<uint64_t> activeSpanStartNs;
     };
 
     inline static std::atomic_bool s_enabled = false;

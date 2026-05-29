@@ -1,16 +1,17 @@
 #pragma once
 #include "entity_debugger.h"
 #include "utils/mod_settings.h"
+#include "platform/compat.h"
 
 class CemuHooks {
 public:
     CemuHooks() {
-        m_cemuHandle = GetModuleHandleA(NULL);
-        checkAssert(m_cemuHandle != NULL, "Failed to get handle of Cemu process which is required for interfacing with Cemu!");
+        m_cemuHandle = platform::OpenSelfModule();
+        checkAssert(m_cemuHandle != nullptr, "Failed to get handle of Cemu process which is required for interfacing with Cemu!");
 
-        gameMeta_getTitleId = (gameMeta_getTitleIdPtr_t)GetProcAddress(m_cemuHandle, "gameMeta_getTitleId");
-        memory_getBase = (memory_getBasePtr_t)GetProcAddress(m_cemuHandle, "memory_getBase");
-        osLib_registerHLEFunction = (osLib_registerHLEFunctionPtr_t)GetProcAddress(m_cemuHandle, "osLib_registerHLEFunction");
+        gameMeta_getTitleId = (gameMeta_getTitleIdPtr_t)platform::GetModuleSymbol(m_cemuHandle, "gameMeta_getTitleId");
+        memory_getBase = (memory_getBasePtr_t)platform::GetModuleSymbol(m_cemuHandle, "memory_getBase");
+        osLib_registerHLEFunction = (osLib_registerHLEFunctionPtr_t)platform::GetModuleSymbol(m_cemuHandle, "osLib_registerHLEFunction");
         checkAssert(gameMeta_getTitleId != nullptr && memory_getBase != nullptr && osLib_registerHLEFunction != nullptr, "Failed to get function pointers of Cemu functions! Is this hook being used on Cemu?");
 
         bool isSupportedTitleId = gameMeta_getTitleId() == 0x00050000101C9300 || gameMeta_getTitleId() == 0x00050000101C9400 || gameMeta_getTitleId() == 0x00050000101C9500;
@@ -19,7 +20,9 @@ public:
         s_memoryBaseAddress = (uint64_t)memory_getBase();
         checkAssert(s_memoryBaseAddress != 0, "Failed to get memory base address of Cemu process!");
 
+#ifdef _WIN32
         InitWindowHandles();
+#endif
 
         osLib_registerHLEFunction("coreinit", "hook_UpdateSettings", &hook_UpdateSettings);
 
@@ -96,11 +99,13 @@ public:
         osLib_registerHLEFunction("coreinit", "hook_VisualizeRayCastHits", &hook_VisualizeRayCastHits);
     };
     ~CemuHooks() {
-        FreeLibrary(m_cemuHandle);
+        platform::CloseModule(m_cemuHandle);
     };
 
+#ifdef _WIN32
     static HWND m_cemuTopWindow;
     static HWND m_cemuRenderWindow;
+#endif
     static uint64_t s_memoryBaseAddress;
 
     std::unique_ptr<class EntityDebugger> m_entityDebugger;
@@ -151,6 +156,14 @@ public:
     static bool IsFirstPerson();
     static bool IsThirdPerson();
     static bool UseBlackBarsDuringEvents();
+    struct ScreenDebugState {
+        uint32_t ptr = 0;
+        int8_t openPriority = 0;
+        int8_t state = 0;
+        bool open = false;
+        bool visible = false;
+    };
+    static ScreenDebugState GetScreenDebugState(ScreenId screen);
     static bool IsScreenOpen(ScreenId screen);
     static bool IsScreenVisible(ScreenId screen);
     static bool IsAnyFadeScreenVisible();
@@ -167,7 +180,7 @@ public:
     }
 
 private:
-    HMODULE m_cemuHandle;
+    platform::ModuleHandle m_cemuHandle;
 
     osLib_registerHLEFunctionPtr_t osLib_registerHLEFunction;
     memory_getBasePtr_t memory_getBase;
@@ -178,7 +191,9 @@ private:
     static uint32_t s_isRiding;
     static uint32_t s_isRidingSandSeal;
 
+#ifdef _WIN32
     static void InitWindowHandles();
+#endif
 
     static std::pair<glm::vec3, glm::fquat> CalculateVRWorldPose(const BESeadLookAtCamera& camera, uint8_t side);
 
@@ -306,4 +321,3 @@ public:
         }
     }
 };
-

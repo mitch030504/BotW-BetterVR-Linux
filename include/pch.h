@@ -6,10 +6,12 @@
 #include <functional>
 #include <type_traits>
 #include <ranges>
+#include <map>
 #include <set>
 #include <unordered_set>
 #include <queue>
 #include <iostream>
+#include <sstream>
 #include <vector>
 #include <algorithm>
 #include <thread>
@@ -19,17 +21,15 @@
 #include <algorithm>
 #include <cctype>
 
-#include <Windows.h>
-#include <winrt/base.h>
-#include <shellapi.h>
+// Platform-specific headers, macros, and shims (Win32/D3D12 vs POSIX/Vulkan).
+// Pulled in before the shared Vulkan/OpenXR includes so the backend-selection
+// macros (VK_USE_PLATFORM_WIN32_KHR, XR_USE_*) are visible to them.
+#ifdef _WIN32
+#include "platform/pch_win32.h"
+#else
+#include "platform/pch_posix.h"
+#endif
 
-
-// These macros mess with some of Vulkan's functions
-#undef ERROR
-#undef CreateEvent
-#undef CreateSemaphore
-
-#define VK_USE_PLATFORM_WIN32_KHR
 #define VK_NO_PROTOTYPES
 #include <vulkan/vk_layer.h>
 #include <vulkan/vulkan_core.h>
@@ -38,23 +38,7 @@
 #define VKROOTS_NEGOTIATION_INTERFACE VRLayer_NegotiateLoaderLayerInterfaceVersion
 #include "vkroots.h"
 
-// D3D12 includes
-#include <d3d12.h>
-#include <D3Dcompiler.h>
-#include <dxgi1_6.h>
-
-#pragma comment(lib, "d3d12.lib")
-#pragma comment(lib, "dxgi.lib")
-#pragma comment(lib, "D3DCompiler.lib")
-#pragma comment(lib, "dxguid.lib")
-
-#include <wrl/client.h>
-
-using Microsoft::WRL::ComPtr;
-
 // OpenXR includes
-#define XR_USE_PLATFORM_WIN32
-#define XR_USE_GRAPHICS_API_D3D12
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
@@ -78,6 +62,7 @@ using Microsoft::WRL::ComPtr;
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/string_cast.hpp>
 #include <glm/gtx/euler_angles.hpp>
+#include <glm/gtx/quaternion.hpp>
 #undef GLM_ENABLE_EXPERIMENTAL
 
 #define ENABLE_VK_ROBUSTNESS 0
@@ -136,14 +121,7 @@ inline uint32_t stringToHash(const char* str) {
     return hash;
 }
 
-inline std::string wcharToUtf8(const wchar_t* wstr) {
-    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
-    std::string str(size_needed, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wstr, -1, &str[0], size_needed, nullptr, nullptr);
-    return str;
-}
-
-#define PADDED_BYTES(from, up) uint8_t byte_##from##[ ## (up-from+0x04) ## ]
+#define PADDED_BYTES(from, up) uint8_t byte_##from [(up-from+0x04)]
 
 template<class T, template<class...> class U>
 inline constexpr bool is_instance_of_v = std::false_type{};
@@ -251,11 +229,11 @@ inline T swapEndianness(T val) {
     }
 }
 
-struct BETypeCompatible {
-};
+#pragma pack(push, 1)
 
 template<typename T>
-struct BEType : BETypeCompatible {
+struct BEType {
+    using betype_tag = void;
     T val;
 
     BEType() = default;
@@ -311,10 +289,17 @@ struct BEType : BETypeCompatible {
 };
 
 
+// A type is "BE-readable" (already big-endian-aware -> read it raw) when it carries the
+// betype_tag marker. A member typedef adds zero layout (unlike a base class) and is inherited,
+// so the whole sead::SafeString hierarchy is detected without a hand-maintained list.
 template<typename T>
-inline constexpr bool is_BEType_v = std::is_base_of_v<BETypeCompatible, T>;
+concept BEReadable = requires { typename T::betype_tag; };
 
-struct BEVec2 : BETypeCompatible {
+template<typename T>
+inline constexpr bool is_BEType_v = BEReadable<T>;
+
+struct BEVec2 {
+    using betype_tag = void;
     BEType<float> x;
     BEType<float> y;
 
@@ -327,7 +312,8 @@ struct BEVec2 : BETypeCompatible {
     }
 };
 
-struct BEVec3 : BETypeCompatible {
+struct BEVec3 {
+    using betype_tag = void;
     BEType<float> x;
     BEType<float> y;
     BEType<float> z;
@@ -355,7 +341,8 @@ struct BEVec3 : BETypeCompatible {
     }
 };
 
-struct BEMatrix34 : BETypeCompatible {
+struct BEMatrix34 {
+    using betype_tag = void;
     BEType<float> x_x;
     BEType<float> y_x;
     BEType<float> z_x;
@@ -445,7 +432,8 @@ struct BEMatrix34 : BETypeCompatible {
     }
 };
 
-struct BEMatrix44 : BETypeCompatible {
+struct BEMatrix44 {
+    using betype_tag = void;
     BEType<float> a00;
     BEType<float> a01;
     BEType<float> a02;
@@ -494,9 +482,6 @@ struct BEMatrix44 : BETypeCompatible {
     }
 };
 
-
-
-#pragma pack(push, 1)
 struct BESeadProjection {
     BEType<bool> dirty;
     BEType<bool> deviceDirty;

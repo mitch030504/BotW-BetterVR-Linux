@@ -155,7 +155,7 @@ public:
         glm::vec3 ortho = glm::normalize(glm::cross(planeNormal, dirNorm));
 
         // arm 1 direction (world)
-        glm::vec3 arm1Dir = glm::normalize(dirNorm * cos(alpha) + ortho * sin(alpha));
+        glm::vec3 arm1Dir = glm::normalize(dirNorm * cosf(alpha) + ortho * sinf(alpha));
 
         // arm 2 direction (world)
         glm::vec3 elbowPos = rootPos + arm1Dir * l1;

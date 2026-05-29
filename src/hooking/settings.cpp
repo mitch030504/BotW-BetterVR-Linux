@@ -95,14 +95,17 @@ void InitSettings() {
     ImGui::AddSettingsHandler(&ini_handler);
 }
 
+#ifdef _WIN32
 HWND CemuHooks::m_cemuTopWindow = NULL;
 HWND CemuHooks::m_cemuRenderWindow = NULL;
+#endif
 uint64_t CemuHooks::s_memoryBaseAddress = 0;
 std::atomic_uint32_t CemuHooks::s_framesSinceLastCameraUpdate = 0;
 
 
 std::unordered_set<ScreenId> prevEnabledScreens = {};
 
+#ifdef _WIN32
 void CemuHooks::InitWindowHandles() {
     // find HWND that starts with Cemu in its title
     struct EnumWindowsData {
@@ -139,6 +142,7 @@ void CemuHooks::InitWindowHandles() {
     }
     m_cemuRenderWindow = iteratedHwnd;
 }
+#endif
 
 void CemuHooks::hook_UpdateSettings(PPCInterpreter_t* hCPU) {
     // Log::print("Updated settings!");
@@ -343,9 +347,13 @@ void CemuHooks::hook_FixUIBlending(PPCInterpreter_t* hCPU) {
         bool matchesAlpha = alphaSrcFactor == GX2_BLENDFACTOR::SRC_ALPHA && alphaDstFactor == GX2_BLENDFACTOR::ONE_MINUS_SRC_ALPHA && alphaCombineFunc == GX2_COMBINEFUNC::DST_PLUS_SRC;
 
         if (matchesColorSettings && matchesAlpha) {
+#ifdef _WIN32
+            // Windows: modify alpha blend for D3D12 shader-based composition
             hCPU->gpr[7] = 1;
             hCPU->gpr[8] = std::to_underlying(GX2_BLENDFACTOR::ZERO);
             hCPU->gpr[9] = std::to_underlying(GX2_BLENDFACTOR::DST_ALPHA);
+#endif
+            // Linux: leave alpha blending unmodified so HUD draws write proper alpha
 
             //Log::print<VERBOSE>("FixUIBlending called with renderTargetIndex: {}, colorSrcFactor: {}, colorDstFactor: {}, colorCombineFunc: {}, separateAlphaBlend: {}, alphaSrcFactor: {}, alphaDstFactor: {}, alphaCombineFunc: {}", renderTargetIndex, std::to_underlying(colorSrcFactor), std::to_underlying(colorDstFactor), std::to_underlying(colorCombineFunc), separateAlphaBlend, std::to_underlying(alphaSrcFactor), std::to_underlying(alphaDstFactor), std::to_underlying(alphaCombineFunc));
         }
