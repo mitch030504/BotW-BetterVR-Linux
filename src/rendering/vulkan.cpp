@@ -2,6 +2,14 @@
 #include "hooking/layer.h"
 #include "instance.h"
 #include "utils/logger.h"
+#ifndef _WIN32
+#include "rendering/linux_desktop_mirror.h"
+#endif
+
+#ifndef _WIN32
+std::atomic<int32_t> g_requestedSubmitQueueIndex{-1};
+std::atomic<int32_t> g_requestedCopyQueueIndex{-1};
+#endif
 
 RND_Vulkan::RND_Vulkan(VkInstance vkInstance, VkPhysicalDevice vkPhysDevice, VkDevice vkDevice): m_instance(vkInstance), m_physicalDevice(vkPhysDevice), m_device(vkDevice) {
     m_instanceDispatch = vkroots::tables::InstanceDispatches.find(vkInstance);
@@ -50,6 +58,10 @@ uint32_t RND_Vulkan::FindMemoryType(uint32_t memoryTypeBitsRequirement, VkMemory
 
 
 VkResult VRLayer::VkDeviceOverrides::GetPhysicalDeviceSurfacePresentModesKHR(const vkroots::VkDeviceDispatch& pDispatch, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, uint32_t* pPresentModeCount, VkPresentModeKHR* pPresentModes) {
+    if (!VRLayer::IsLayerActiveForProcess()) {
+        return pDispatch.GetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, pPresentModeCount, pPresentModes);
+    }
+
     // check all supported present modes
     uint32_t testPresentModes = 0;
     VkResult result = pDispatch.GetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &testPresentModes, VK_NULL_HANDLE);
@@ -79,5 +91,28 @@ VkResult VRLayer::VkDeviceOverrides::GetPhysicalDeviceSurfacePresentModesKHR(con
 }
 
 VkResult VRLayer::VkDeviceOverrides::CreateSwapchainKHR(const vkroots::VkDeviceDispatch& pDispatch, VkDevice device, const VkSwapchainCreateInfoKHR* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSwapchainKHR* pSwapchain) {
+#ifndef _WIN32
+    if (VRLayer::IsLayerActiveForProcess()) {
+        return LinuxDesktopMirror::CreateSwapchainKHR(pDispatch, device, pCreateInfo, pAllocator, pSwapchain);
+    }
+#endif
     return pDispatch.CreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
+}
+
+VkResult VRLayer::VkDeviceOverrides::GetSwapchainImagesKHR(const vkroots::VkDeviceDispatch& pDispatch, VkDevice device, VkSwapchainKHR swapchain, uint32_t* pSwapchainImageCount, VkImage* pSwapchainImages) {
+#ifndef _WIN32
+    if (VRLayer::IsLayerActiveForProcess()) {
+        return LinuxDesktopMirror::GetSwapchainImagesKHR(pDispatch, device, swapchain, pSwapchainImageCount, pSwapchainImages);
+    }
+#endif
+    return pDispatch.GetSwapchainImagesKHR(device, swapchain, pSwapchainImageCount, pSwapchainImages);
+}
+
+void VRLayer::VkDeviceOverrides::DestroySwapchainKHR(const vkroots::VkDeviceDispatch& pDispatch, VkDevice device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* pAllocator) {
+#ifndef _WIN32
+    if (VRLayer::IsLayerActiveForProcess()) {
+        return LinuxDesktopMirror::DestroySwapchainKHR(pDispatch, device, swapchain, pAllocator);
+    }
+#endif
+    return pDispatch.DestroySwapchainKHR(device, swapchain, pAllocator);
 }

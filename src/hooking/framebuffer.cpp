@@ -7,12 +7,22 @@
 #include "utils/debug_draw.h"
 #include "utils/render_utils.h"
 
+#ifndef _WIN32
+#include "rendering/linux_desktop_mirror.h"
+#include "framebuffer_linux_diag.h"
+#include <cstdlib>
+#include <cstring>
+#endif
 
 std::mutex lockImageResolutions;
 std::unordered_map<VkImage, std::pair<VkExtent2D, VkFormat>> imageResolutions;
 
+#ifdef _WIN32
 std::mutex s_activeCopyMutex;
 std::vector<std::pair<VkCommandBuffer, SharedTexture*>> s_activeCopyOperations;
+#else
+static bool s_hudCapturedThisFrame = false;
+#endif
 
 VkImage s_curr3DColorImage = VK_NULL_HANDLE;
 VkImage s_curr3DDepthImage = VK_NULL_HANDLE;
@@ -20,6 +30,10 @@ VkImage s_curr3DDepthImage = VK_NULL_HANDLE;
 using namespace VRLayer;
 
 VkResult VkDeviceOverrides::CreateImage(const vkroots::VkDeviceDispatch& pDispatch, VkDevice device, const VkImageCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkImage* pImage) {
+    if (!VRLayer::IsLayerActiveForProcess()) {
+        return pDispatch.CreateImage(device, pCreateInfo, pAllocator, pImage);
+    }
+
     VkResult res = pDispatch.CreateImage(device, pCreateInfo, pAllocator, pImage);
 
     if (pCreateInfo->extent.width >= 1280 && pCreateInfo->extent.height >= 720) {
@@ -31,6 +45,10 @@ VkResult VkDeviceOverrides::CreateImage(const vkroots::VkDeviceDispatch& pDispat
 }
 
 void VkDeviceOverrides::DestroyImage(const vkroots::VkDeviceDispatch& pDispatch, VkDevice device, VkImage image, const VkAllocationCallbacks* pAllocator) {
+    if (!VRLayer::IsLayerActiveForProcess()) {
+        return pDispatch.DestroyImage(device, image, pAllocator);
+    }
+
     lockImageResolutions.lock();
     imageResolutions.erase(image);
     if (s_curr3DColorImage == image) {
@@ -59,6 +77,10 @@ void CemuHooks::hook_FixCameraSaveFilesAndInventory(PPCInterpreter_t* hCPU) {
 
 
 void VkDeviceOverrides::CmdClearColorImage(const vkroots::VkCommandBufferDispatch& pDispatch, VkCommandBuffer commandBuffer, VkImage image, VkImageLayout imageLayout, const VkClearColorValue* pColor, uint32_t rangeCount, const VkImageSubresourceRange* pRanges) {
+    if (!VRLayer::IsLayerActiveForProcess()) {
+        return pDispatch.CmdClearColorImage(commandBuffer, image, imageLayout, pColor, rangeCount, pRanges);
+    }
+
     // check whether the magic values are there, and which order they are in to determine which eye
     OpenXR::EyeSide side = (OpenXR::EyeSide)-1;
     if (pColor->float32[1] >= 0.12 && pColor->float32[1] <= 0.13 && pColor->float32[2] >= 0.97 && pColor->float32[2] <= 0.99) {
@@ -87,9 +109,11 @@ void VkDeviceOverrides::CmdClearColorImage(const vkroots::VkCommandBufferDispatc
             Log::print<RENDERING>("Renderer is not initialized yet!");
             return pDispatch.CmdClearColorImage(commandBuffer, image, imageLayout, pColor, rangeCount, pRanges);
         }
+        auto& imguiOverlay = renderer->m_imguiOverlay;
+
+#ifdef _WIN32
         auto& layer3D = renderer->m_layer3D;
         auto& layer2D = renderer->m_layer2D;
-        auto& imguiOverlay = renderer->m_imguiOverlay;
 
         // initialize the textures of both 2D and 3D layer if either is found since they share the same VkImage and resolution
         if (captureIdx == 0 || captureIdx == 2) {
@@ -276,6 +300,23 @@ void VkDeviceOverrides::CmdClearColorImage(const vkroots::VkCommandBufferDispatc
         }
         returnToLayout();
         return;
+#else // !_WIN32
+        // Linux capture lives in renderer_vulkan.cpp; the hook only looks up the source
+        // image's tracked dimensions and dispatches.
+        uint32_t srcWidth = 0, srcHeight = 0;
+        VkFormat srcFormat = VK_FORMAT_UNDEFINED;
+        {
+            std::lock_guard lk(lockImageResolutions);
+            if (auto it = imageResolutions.find(image); it != imageResolutions.end()) {
+                srcWidth = it->second.first.width;
+                srcHeight = it->second.first.height;
+                srcFormat = it->second.second;
+            }
+        }
+        renderer->LinuxHandleColorClear(side, captureIdx, frameIdx, pDispatch, commandBuffer, image,
+            imageLayout, pColor, rangeCount, pRanges, srcWidth, srcHeight, srcFormat, s_hudCapturedThisFrame);
+        return;
+#endif // _WIN32
     }
     else {
         return pDispatch.CmdClearColorImage(commandBuffer, image, imageLayout, pColor, rangeCount, pRanges);
@@ -283,6 +324,10 @@ void VkDeviceOverrides::CmdClearColorImage(const vkroots::VkCommandBufferDispatc
 }
 
 void VkDeviceOverrides::CmdClearDepthStencilImage(const vkroots::VkCommandBufferDispatch& pDispatch, VkCommandBuffer commandBuffer, VkImage image, VkImageLayout imageLayout, const VkClearDepthStencilValue* pDepthStencil, uint32_t rangeCount, const VkImageSubresourceRange* pRanges) {
+    if (!VRLayer::IsLayerActiveForProcess()) {
+        return pDispatch.CmdClearDepthStencilImage(commandBuffer, image, imageLayout, pDepthStencil, rangeCount, pRanges);
+    }
+
     // check for magical clear values
     // check order and whether there's a match with the magical clear value
     OpenXR::EyeSide side = (OpenXR::EyeSide)-1;
@@ -294,6 +339,7 @@ void VkDeviceOverrides::CmdClearDepthStencilImage(const vkroots::VkCommandBuffer
     }
 
     if (rangeCount == 1 && side != (OpenXR::EyeSide)-1) {
+#ifdef _WIN32
         // stencil value is the frame counter
         const uint32_t frameCounter = pDepthStencil->stencil;
         checkAssert(frameCounter == 0 || frameCounter == 1, "Invalid frame counter for depth clear!");
@@ -341,14 +387,6 @@ void VkDeviceOverrides::CmdClearDepthStencilImage(const vkroots::VkCommandBuffer
                 return;
             }
 
-            // if (layer3D.GetStatus() == Status3D::LEFT_BINDING_DEPTH || layer3D.GetStatus() == Status3D::RIGHT_BINDING_DEPTH) {
-            //     // seems to always be the case whenever closing the (inventory) menu
-            //     Log::print("A depth texture is already bound for the current frame!");
-            //     return;
-            // }
-            //
-            // checkAssert(layer3D.GetStatus() == Status3D::LEFT_BINDING_COLOR || layer3D.GetStatus() == Status3D::RIGHT_BINDING_COLOR, "3D layer is not in the correct state for capturing depth images!");
-
             SharedTexture* texture = layer3D->CopyDepthToLayer(side, commandBuffer, image, frameCounter);
             VRManager::instance().XR->GetRenderer()->On3DDepthCopied(side, frameCounter);
 
@@ -359,6 +397,24 @@ void VkDeviceOverrides::CmdClearDepthStencilImage(const vkroots::VkCommandBuffer
             returnToLayout();
             return;
         }
+#else // !_WIN32
+        // Linux capture lives in renderer_vulkan.cpp; the hook only looks up the source
+        // image's tracked dimensions and dispatches.
+        auto* renderer = VRManager::instance().XR->GetRenderer();
+        if (!renderer || !renderer->IsInitialized()) {
+            return pDispatch.CmdClearDepthStencilImage(commandBuffer, image, imageLayout, pDepthStencil, rangeCount, pRanges);
+        }
+        uint32_t srcWidth = 0, srcHeight = 0;
+        {
+            std::lock_guard lk(lockImageResolutions);
+            if (auto it = imageResolutions.find(image); it != imageResolutions.end()) {
+                srcWidth = it->second.first.width;
+                srcHeight = it->second.first.height;
+            }
+        }
+        renderer->LinuxHandleDepthClear(side, pDispatch, commandBuffer, image, imageLayout, pDepthStencil, rangeCount, pRanges, srcWidth, srcHeight);
+        return;
+#endif // _WIN32
     }
     else {
         return pDispatch.CmdClearDepthStencilImage(commandBuffer, image, imageLayout, pDepthStencil, rangeCount, pRanges);
@@ -366,8 +422,13 @@ void VkDeviceOverrides::CmdClearDepthStencilImage(const vkroots::VkCommandBuffer
 }
 
 VkResult VkDeviceOverrides::QueueSubmit(const vkroots::VkQueueDispatch& pDispatch, VkQueue queue, uint32_t submitCount, const VkSubmitInfo* pSubmits, VkFence fence) {
+    if (!VRLayer::IsLayerActiveForProcess()) {
+        return pDispatch.QueueSubmit(queue, submitCount, pSubmits, fence);
+    }
+
     VkResult result = VK_SUCCESS;
-    
+
+#ifdef _WIN32
     size_t activeCopyCount;
     {
         std::lock_guard lk(s_activeCopyMutex);
@@ -474,24 +535,50 @@ VkResult VkDeviceOverrides::QueueSubmit(const vkroots::VkQueueDispatch& pDispatc
         }
         result = pDispatch.QueueSubmit(queue, submitCount, shadowSubmits.data(), fence);
     }
+#else // !_WIN32
+    result = pDispatch.QueueSubmit(queue, submitCount, pSubmits, fence);
+#endif // _WIN32
 
     if (result != VK_SUCCESS) {
-        Log::print<ERROR>("QueueSubmit failed with error {}", result);
+        // Rate-limit so a sustained DEVICE_LOST doesn't flood the log with
+        // thousands of identical messages.
+        static std::atomic<int> s_errCount{0};
+        static std::atomic<VkResult> s_lastErr{VK_SUCCESS};
+        if (result != s_lastErr.load() || s_errCount.fetch_add(1) < 5) {
+            Log::print<ERROR>("QueueSubmit failed with error {}", result);
+            s_lastErr.store(result);
+        }
     }
 
     return result;
 }
 
 VkResult VkDeviceOverrides::QueuePresentKHR(const vkroots::VkQueueDispatch& pDispatch, VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
+    if (!VRLayer::IsLayerActiveForProcess()) {
+        return pDispatch.QueuePresentKHR(queue, pPresentInfo);
+    }
+
+#ifndef _WIN32
+    // Reset HUD capture flag each frame so menus without 3D rendering still get captured
+    s_hudCapturedThisFrame = false;
+#endif
     VRManager::instance().XR->ProcessEvents();
 
     auto* renderer = VRManager::instance().XR->GetRenderer();
+#ifdef _WIN32
     if (renderer && renderer->m_layer3D && renderer->m_layer2D && renderer->m_imguiOverlay) {
+#else
+    if (renderer && renderer->IsInitialized()) {
+#endif
         if (renderer->IsInitialized()) {
             renderer->EndFrame();
         }
         renderer->StartFrame();
     }
 
+#ifdef _WIN32
     return pDispatch.QueuePresentKHR(queue, pPresentInfo);
+#else
+    return LinuxDesktopMirror::QueuePresentKHR(pDispatch, queue, pPresentInfo);
+#endif
 }

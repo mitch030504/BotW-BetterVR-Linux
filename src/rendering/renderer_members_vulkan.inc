@@ -9,6 +9,21 @@ void LinuxCopyDepthToSwapchain(OpenXR::EyeSide side, VkCommandBuffer cmdBuffer, 
 void LinuxCopyHudToSwapchain(VkCommandBuffer cmdBuffer, VkImage srcImage, uint32_t srcWidth, uint32_t srcHeight);
 void LinuxMarkInventoryPauseTransition(bool opened);
 
+// Linux capture dispatch for the CmdClearColorImage hook (defined in renderer_vulkan.cpp);
+// keeps the shared framebuffer.cpp hook a thin dispatcher. hudCapturedThisFrame is the
+// hook-owned per-frame HUD-once flag, passed by reference.
+void LinuxHandleColorClear(OpenXR::EyeSide side, long captureIdx, long frameIdx,
+    const vkroots::VkCommandBufferDispatch& pDispatch, VkCommandBuffer commandBuffer, VkImage image,
+    VkImageLayout imageLayout, const VkClearColorValue* pColor, uint32_t rangeCount,
+    const VkImageSubresourceRange* pRanges, uint32_t srcWidth, uint32_t srcHeight, VkFormat srcFormat,
+    bool& hudCapturedThisFrame);
+
+// Linux capture dispatch for the CmdClearDepthStencilImage hook (defined in renderer_vulkan.cpp).
+void LinuxHandleDepthClear(OpenXR::EyeSide side,
+    const vkroots::VkCommandBufferDispatch& pDispatch, VkCommandBuffer commandBuffer, VkImage image,
+    VkImageLayout imageLayout, const VkClearDepthStencilValue* pDepthStencil, uint32_t rangeCount,
+    const VkImageSubresourceRange* pRanges, uint32_t srcWidth, uint32_t srcHeight);
+
 void LinuxUpdateRuntimeFrameTiming(const XrFrameState& frameState, double waitFrameMs);
 
 // Current head-pose views accessor used by the shared pose getters; late-latches the

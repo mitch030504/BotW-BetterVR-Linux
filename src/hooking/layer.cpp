@@ -1,7 +1,16 @@
 #include "pch.h"
 #include "layer.h"
 #include "instance.h"
+#ifndef _WIN32
+#include "rendering/linux_desktop_mirror.h"
+#include "layer_linux.h"
+#endif
 #include <cstring>
+#include <cstdlib>
+#include <string_view>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 #ifdef _DEBUG
 static VkInstance s_debugMessengerInstance = VK_NULL_HANDLE;
@@ -35,6 +44,9 @@ VkResult VRLayer::VkInstanceOverrides::CreateInstance(PFN_vkCreateInstance creat
     if (!createInstanceFunc || !pCreateInfo || !pInstance) {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
+    if (!IsLayerActiveForProcess()) {
+        return createInstanceFunc(pCreateInfo, pAllocator, pInstance);
+    }
 
     VkInstanceCreateInfo modifiedCreateInfo = *pCreateInfo;
     std::vector<const char*> modifiedExtensions;
@@ -44,6 +56,10 @@ VkResult VRLayer::VkInstanceOverrides::CreateInstance(PFN_vkCreateInstance creat
             modifiedExtensions.push_back(pCreateInfo->ppEnabledExtensionNames[i]);
         }
     }
+
+#ifndef _WIN32
+    LinuxAddRequiredInstanceExtensions(modifiedExtensions);
+#endif
 
 #ifdef _DEBUG
     bool debugUtilsEnabled = false;
@@ -110,12 +126,22 @@ VkResult VRLayer::VkInstanceOverrides::CreateInstance(PFN_vkCreateInstance creat
     VRManager::instance().vkVersion = modifiedCreateInfo.pApplicationInfo->apiVersion;
 
     Log::print<INFO>("Created Vulkan instance (using Vulkan {}.{}.{}) successfully!", VK_API_VERSION_MAJOR(modifiedCreateInfo.pApplicationInfo->apiVersion), VK_API_VERSION_MINOR(modifiedCreateInfo.pApplicationInfo->apiVersion), VK_API_VERSION_PATCH(modifiedCreateInfo.pApplicationInfo->apiVersion));
+#ifdef _WIN32
     checkAssert(VK_VERSION_MINOR(modifiedCreateInfo.pApplicationInfo->apiVersion) != 0 || VK_VERSION_MAJOR(modifiedCreateInfo.pApplicationInfo->apiVersion) > 1, "Vulkan version needs to be v1.1 or higher!");
+#else
+    if (VK_VERSION_MINOR(modifiedCreateInfo.pApplicationInfo->apiVersion) == 0 && VK_VERSION_MAJOR(modifiedCreateInfo.pApplicationInfo->apiVersion) <= 1) {
+        Log::print<WARNING>("Vulkan 1.0 instance created (likely by the OpenXR runtime, not Cemu)");
+    }
+#endif
     return result;
 }
 
 
 VkResult VRLayer::VkInstanceOverrides::EnumeratePhysicalDevices(const vkroots::VkInstanceDispatch& pDispatch, VkInstance instance, uint32_t* pPhysicalDeviceCount, VkPhysicalDevice* pPhysicalDevices) {
+    if (!IsLayerActiveForProcess()) {
+        return pDispatch.EnumeratePhysicalDevices(instance, pPhysicalDeviceCount, pPhysicalDevices);
+    }
+
     // Proceed to get all devices
     uint32_t internalCount = 0;
     checkVkResult(pDispatch.EnumeratePhysicalDevices(instance, &internalCount, nullptr), "Failed to retrieve number of vulkan physical devices!");
@@ -131,10 +157,12 @@ VkResult VRLayer::VkInstanceOverrides::EnumeratePhysicalDevices(const vkroots::V
         properties.pNext = &deviceId;
         pDispatch.GetPhysicalDeviceProperties2(device, &properties);
 
+#ifdef _WIN32
         if (deviceId.deviceLUIDValid && memcmp(&VRManager::instance().XR->m_capabilities.adapter, deviceId.deviceLUID, VK_LUID_SIZE) == 0) {
             matchedDevice = device;
             break;
         }
+#endif
 
         // Keep track of the first discrete GPU as fallback for drivers that don't report valid LUIDs
         if (fallbackDevice == VK_NULL_HANDLE && properties.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
@@ -186,6 +214,10 @@ VkResult VRLayer::VkInstanceOverrides::EnumeratePhysicalDevices(const vkroots::V
 // Some layers (OBS vulkan layer) will skip the vkEnumeratePhysicalDevices hook
 // Therefor we also override vkGetPhysicalDeviceProperties to make any non-compatible VkPhysicalDevice use Vulkan 1.0 which Cemu won't list due to it being too low
 void VRLayer::VkInstanceOverrides::GetPhysicalDeviceProperties(const vkroots::VkPhysicalDeviceDispatch& pDispatch, VkPhysicalDevice physicalDevice, VkPhysicalDeviceProperties* pProperties) {
+    if (!IsLayerActiveForProcess()) {
+        return pDispatch.GetPhysicalDeviceProperties(physicalDevice, pProperties);
+    }
+
     // Do original query
     pDispatch.GetPhysicalDeviceProperties(physicalDevice, pProperties);
 
@@ -196,44 +228,68 @@ void VRLayer::VkInstanceOverrides::GetPhysicalDeviceProperties(const vkroots::Vk
         properties.pNext = &deviceId;
         pDispatch.GetPhysicalDeviceProperties2(physicalDevice, &properties);
 
+#ifdef _WIN32
         if (deviceId.deviceLUIDValid && memcmp(&VRManager::instance().XR->m_capabilities.adapter, deviceId.deviceLUID, VK_LUID_SIZE) != 0) {
             pProperties->apiVersion = VK_API_VERSION_1_0;
         }
+#endif
     }
 }
 
 // Some layers (OBS vulkan layer) will skip the vkEnumeratePhysicalDevices hook
 // Therefor we also override vkGetPhysicalDeviceQueueFamilyProperties to make any non-VR-compatible VkPhysicalDevice have 0 queues
 void VRLayer::VkInstanceOverrides::GetPhysicalDeviceQueueFamilyProperties(const vkroots::VkPhysicalDeviceDispatch& pDispatch, VkPhysicalDevice physicalDevice, uint32_t* pQueueFamilyPropertyCount, VkQueueFamilyProperties* pQueueFamilyProperties) {
+    if (!IsLayerActiveForProcess()) {
+        return pDispatch.GetPhysicalDeviceQueueFamilyProperties(physicalDevice, pQueueFamilyPropertyCount, pQueueFamilyProperties);
+    }
+
     // Check whether this VkPhysicalDevice matches the LUID that OpenXR returns
     VkPhysicalDeviceIDProperties deviceId = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES };
     VkPhysicalDeviceProperties2 properties = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
     properties.pNext = &deviceId;
     pDispatch.GetPhysicalDeviceProperties2(physicalDevice, &properties);
 
+#ifdef _WIN32
     if (deviceId.deviceLUIDValid && memcmp(&VRManager::instance().XR->m_capabilities.adapter, deviceId.deviceLUID, VK_LUID_SIZE) != 0) {
         *pQueueFamilyPropertyCount = 0;
         return;
     }
+#endif
 
     return pDispatch.GetPhysicalDeviceQueueFamilyProperties(physicalDevice, pQueueFamilyPropertyCount, pQueueFamilyProperties);
 }
 
-const std::vector<std::string> additionalDeviceExtensions = {
-    VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
-    VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME,
-    VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME,
-    VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME,
-    VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME,
-    VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
-#if ENABLE_VK_ROBUSTNESS
-    VK_EXT_DEVICE_FAULT_EXTENSION_NAME,
-    VK_EXT_ROBUSTNESS_2_EXTENSION_NAME,
-    VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME
+static std::vector<std::string> getAdditionalDeviceExtensions() {
+    std::vector<std::string> exts = {
+        VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
+#ifdef _WIN32
+        VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME,
 #endif
-};
+        VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME,
+        VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME,
+#ifdef _WIN32
+        VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME,
+#endif
+        VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
+#if ENABLE_VK_ROBUSTNESS
+        VK_EXT_DEVICE_FAULT_EXTENSION_NAME,
+        VK_EXT_ROBUSTNESS_2_EXTENSION_NAME,
+        VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME,
+#endif
+    };
+
+#ifndef _WIN32
+    VRLayer::LinuxAddRequiredDeviceExtensions(exts);
+#endif
+
+    return exts;
+}
 
 VkResult VRLayer::VkInstanceOverrides::CreateDevice(const vkroots::VkPhysicalDeviceDispatch& pDispatch, VkPhysicalDevice gpu, const VkDeviceCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDevice* pDevice) {
+    if (!IsLayerActiveForProcess()) {
+        return pDispatch.CreateDevice(gpu, pCreateInfo, pAllocator, pDevice);
+    }
+
     // Query available extensions for this device
     uint32_t extensionCount = 0;
     pDispatch.EnumerateDeviceExtensionProperties(gpu, nullptr, &extensionCount, nullptr);
@@ -252,6 +308,7 @@ VkResult VRLayer::VkInstanceOverrides::CreateDevice(const vkroots::VkPhysicalDev
     for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; i++) {
         modifiedExtensions.push_back(pCreateInfo->ppEnabledExtensionNames[i]);
     }
+    const auto additionalDeviceExtensions = getAdditionalDeviceExtensions();
     for (const std::string& extension : additionalDeviceExtensions) {
         if (std::find(modifiedExtensions.begin(), modifiedExtensions.end(), extension) == modifiedExtensions.end()) {
             if (isExtensionSupported(extension)) {
@@ -369,6 +426,22 @@ VkResult VRLayer::VkInstanceOverrides::CreateDevice(const vkroots::VkPhysicalDev
             qci.queueFamilyIndex, qci.queueCount, familyFlags, qci.flags);
     }
 
+    // Linux only: try to add TWO dedicated VR queues from Cemu's graphics
+    // family. Three-queue topology:
+    //   queue 0           → Cemu (unchanged)
+    //   queue (+1, runtime) → OpenXR runtime composition work
+    //   queue (+2, copy)    → Our submit-thread intermediate→swapchain copies
+    // Separation prevents runtime work and our copies from saturating a shared
+    // queue. If only 1 extra queue is available, runtime and copies share it
+    // (current behavior). If 0, everything shares Cemu's queue.
+    std::vector<VkDeviceQueueCreateInfo> patchedQueueInfos;
+    std::vector<std::vector<float>> patchedPriorities;
+    int32_t requestedSubmitQueueIndex = -1;
+    int32_t requestedCopyQueueIndex = -1;
+#ifndef _WIN32
+    LinuxPatchDeviceQueues(modifiedCreateInfo, queueFamilies, patchedQueueInfos, patchedPriorities, requestedSubmitQueueIndex, requestedCopyQueueIndex);
+#endif
+
     VkResult result = pDispatch.CreateDevice(gpu, &modifiedCreateInfo, pAllocator, pDevice);
     if (result != VK_SUCCESS) {
         Log::print<ERROR>("Failed to create Vulkan device! Error {}", result);
@@ -381,6 +454,10 @@ VkResult VRLayer::VkInstanceOverrides::CreateDevice(const vkroots::VkPhysicalDev
         Log::print<WARNING>("You might encounter an error if you've selected a GPU that's not connected to the VR headset in Cemu's settings. Usually this error is fine as long as this is the case.");
         Log::print<WARNING>("This issue appears due to OBS's Vulkan layer being installed which skips some calls used to hide GPUs that aren't compatible with your VR headset.");
     }
+
+#ifndef _WIN32
+    LinuxPublishQueueIndices(requestedSubmitQueueIndex, requestedCopyQueueIndex);
+#endif
 
     return result;
 }
@@ -400,6 +477,11 @@ void VRLayer::VkInstanceOverrides::DestroyInstance(const vkroots::VkInstanceDisp
 }
 
 void VRLayer::VkDeviceOverrides::DestroyDevice(const vkroots::VkDeviceDispatch& pDispatch, VkDevice device, const VkAllocationCallbacks* pAllocator) {
+#ifndef _WIN32
+    if (IsLayerActiveForProcess()) {
+        LinuxDesktopMirror::Shutdown();
+    }
+#endif
     PFN_vkDestroyDevice ptr_vkDestroyDeviceFn = (PFN_vkDestroyDevice)pDispatch.GetDeviceProcAddr(device, "vkDestroyDevice");
     vkroots::tables::DestroyDispatchTable(device);
     ptr_vkDestroyDeviceFn(device, pAllocator);

@@ -8,7 +8,19 @@
 #include "utils/render_utils.h"
 
 bool CemuHooks::UseMonoFrameBufferTemporarilyDuringMenusOrPictures() {
-    return IsScreenOpen(ScreenId::PauseMenuInfo_00) || VRManager::instance().XR->GetRenderer()->IsGameCapturing3DFrameBuffer();
+    auto* renderer = VRManager::instance().XR->GetRenderer();
+    const bool isCapturingFrozenFrame = renderer != nullptr && renderer->IsGameCapturing3DFrameBuffer();
+#ifndef _WIN32
+    // On Linux, the Vulkan framebuffer copy path does not use this helper to
+    // suppress 3D copies. Keeping pause menus "mono" here only prevents the
+    // stereo camera/projection hooks from rewriting the pause menu's 3D Link
+    // preview and any shared render state it touches.
+    return isCapturingFrozenFrame
+        || IsScreenVisible(ScreenId::PauseMenu_00)
+        || IsScreenVisible(ScreenId::PauseMenuInfo_00);
+#else
+    return IsScreenOpen(ScreenId::PauseMenuInfo_00) || isCapturingFrozenFrame;
+#endif
 }
 
 static std::optional<XrFovf> TryGetRenderFOV(OpenXR::EyeSide side, long frameIdx = -1) {
@@ -122,6 +134,15 @@ static glm::fvec3 ResolveGameplayAnchorPosition(const glm::fvec3& gameplayPos) {
         else {
             playerPos.y += GetSettings().GetPlayerHeightOffset() - actualCrouchOffset;
         }
+
+#ifndef _WIN32
+        // Push camera forward from head center toward eyes in Link's facing direction.
+        // Linux-only: compensates for the Vulkan capture/pose path; upstream Windows is unchanged.
+        glm::fquat playerRot = playerMtx.getRotLE();
+        glm::fvec3 playerForward = playerRot * glm::fvec3(0.0f, 0.0f, 1.0f);
+        constexpr float kEyeForwardOffset = 0.15f;
+        playerPos += playerForward * kEyeForwardOffset;
+#endif
 
         newPos = playerPos;
     }
@@ -368,7 +389,12 @@ void CemuHooks::hook_GetRenderCamera(PPCInterpreter_t* hCPU) {
     uint32_t cameraOut = hCPU->gpr[12];
     EyeSide side = hCPU->gpr[11] == 0 ? EyeSide::LEFT : EyeSide::RIGHT;
 
-    if (UseBlackBarsDuringEvents()) {
+    bool suppressCamera = UseBlackBarsDuringEvents();
+#ifndef _WIN32
+    // Linux-only: also suppress the camera write during mono/menu frames.
+    suppressCamera = suppressCamera || UseMonoFrameBufferTemporarilyDuringMenusOrPictures();
+#endif
+    if (suppressCamera) {
         return;
     }
 

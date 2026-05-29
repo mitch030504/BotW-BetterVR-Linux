@@ -128,33 +128,31 @@ bool CemuHooks::UseBlackBarsDuringEvents() {
     return GetSettings().UseBlackBarsForCutscenes();
 }
 
-bool CemuHooks::IsScreenOpen(ScreenId screen) {
+CemuHooks::ScreenDebugState CemuHooks::GetScreenDebugState(ScreenId screen) {
+    ScreenDebugState result = {};
     uint32_t screenManagerInstance = getMemory<BEType<uint32_t>>(0x1047E650).getLE();
     if (screenManagerInstance != 0) {
-        uint32_t screenBools = getMemory<BEType<uint32_t>>(screenManagerInstance + 0x18).getLE();
-        uint32_t screenPtr = getMemory<BEType<uint32_t>>(screenBools + (std::to_underlying(screen) * 4)).getLE();
-        return screenPtr != 0;
+        uint32_t screenPtrs = getMemory<BEType<uint32_t>>(screenManagerInstance + 0x18).getLE();
+        uint32_t screenPtr = getMemory<BEType<uint32_t>>(screenPtrs + (std::to_underlying(screen) * 4)).getLE();
+        result.ptr = screenPtr;
+        result.open = screenPtr != 0;
+        if (screenPtr != 0) {
+            // IsVisible returns true when the screen is open or when its transitioning to be closed/opened
+            // matches Screen::isClosed() checks, though inverted.
+            result.openPriority = static_cast<int8_t>(getMemory<BEType<uint8_t>>(screenPtr + 0x95).getLE());
+            result.state = static_cast<int8_t>(getMemory<BEType<uint8_t>>(screenPtr + 0x96).getLE());
+            result.visible = result.state != 0 || result.openPriority > 0;
+        }
     }
-    return false;
+    return result;
+}
+
+bool CemuHooks::IsScreenOpen(ScreenId screen) {
+    return GetScreenDebugState(screen).open;
 }
 
 bool CemuHooks::IsScreenVisible(ScreenId screen) {
-    uint32_t screenManagerInstance = getMemory<BEType<uint32_t>>(0x1047E650).getLE();
-    if (screenManagerInstance == 0) {
-        return false;
-    }
-
-    uint32_t screenPtrs = getMemory<BEType<uint32_t>>(screenManagerInstance + 0x18).getLE();
-    uint32_t screenPtr = getMemory<BEType<uint32_t>>(screenPtrs + (std::to_underlying(screen) * 4)).getLE();
-    if (screenPtr == 0) {
-        return false;
-    }
-
-    // IsVisible returns true when the screen is open or when its transitioning to be closed/opened
-    // matches Screen::isClosed() checks, though inverted
-    const int8_t openPriority = static_cast<int8_t>(getMemory<BEType<uint8_t>>(screenPtr + 0x95).getLE());
-    const int8_t screenState = static_cast<int8_t>(getMemory<BEType<uint8_t>>(screenPtr + 0x96).getLE());
-    return screenState != 0 || openPriority > 0;
+    return GetScreenDebugState(screen).visible;
 }
 
 bool CemuHooks::IsAnyFadeScreenVisible() {

@@ -175,6 +175,7 @@ void CemuHooks::hook_ChangeWeaponMtx(PPCInterpreter_t* hCPU) {
             Weapon targetActor = {};
             readMemory(targetActorPtr, &targetActor);
 
+#ifdef _WIN32
             if (strcmp(boneName, "Weapon_L") == 0) {
                 const bool isBow = targetActor.type.getLE() == WeaponType::Bow;
                 const bool isSlateRune = targetActor.name.getLE() == "Item_Conductor";
@@ -183,6 +184,7 @@ void CemuHooks::hook_ChangeWeaponMtx(PPCInterpreter_t* hCPU) {
             else if (targetActor.name.getLE() == "Item_Magnetglove") {
                 RND_Renderer::Layer2D::SetBowAimingActive(true);
             }
+#endif
         }
     }
 
