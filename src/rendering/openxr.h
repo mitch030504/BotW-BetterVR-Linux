@@ -2,6 +2,8 @@
 
 #include "hooking/rumble.h"
 
+class RND_Renderer;
+
 class OpenXR {
     friend class RND_Renderer;
 
@@ -15,8 +17,10 @@ public:
     };
 
     struct Capabilities {
+#ifdef _WIN32
         LUID adapter;
         D3D_FEATURE_LEVEL minFeatureLevel;
+#endif
         bool supportsOrientational;
         bool supportsPositional;
         bool supportsMutatableFOV;
@@ -174,7 +178,12 @@ public:
     } rumbleParameters ;
     std::atomic<RumbleParameters> m_rumbleParameters{};
 
-    void CreateSession(const XrGraphicsBindingD3D12KHR& d3d12Binding);
+    // Creates the OpenXR session from a platform graphics binding (the OpenXR
+    // next-chain struct: XrGraphicsBindingD3D12KHR on Windows,
+    // XrGraphicsBindingVulkanKHR on Linux). Taken as an opaque pointer so the
+    // binding type stays at the call site (instance.h) and this signature is
+    // backend-agnostic.
+    void CreateSession(const void* graphicsBinding, const char* failureMessage);
     void CreateActions();
     std::array<XrViewConfigurationView, 2> GetViewConfigurations();
     std::optional<XrSpaceLocation> UpdateSpaces(XrTime predictedDisplayTime);
@@ -185,6 +194,15 @@ public:
     XrSession GetSession() const { return m_session; }
     RND_Renderer* GetRenderer() const { return m_renderer.get(); }
     RumbleManager* GetRumbleManager() const { return m_rumbleManager.get(); }
+    XrInstance GetInstance() const { return m_instance; }
+    XrSystemId GetSystemId() const { return m_systemId; }
+
+#ifndef _WIN32
+    // Current OpenXR session state (updated by ProcessEvents on Linux). The submit
+    // thread reads this to know whether xrEndFrame is safe to call. Per spec,
+    // xrEndFrame may only be called in VISIBLE or FOCUSED states. Linux-only.
+    std::atomic<XrSessionState> m_currentSessionState{XR_SESSION_STATE_UNKNOWN};
+#endif
 
 private:
     XrPath GetXRPath(const char* str) const {
@@ -252,9 +270,16 @@ private:
 
     XrDebugUtilsMessengerEXT m_debugMessengerHandle = XR_NULL_HANDLE;
 
+#ifdef _WIN32
     PFN_xrGetD3D12GraphicsRequirementsKHR func_xrGetD3D12GraphicsRequirementsKHR = nullptr;
     PFN_xrConvertTimeToWin32PerformanceCounterKHR func_xrConvertTimeToWin32PerformanceCounterKHR = nullptr;
     PFN_xrConvertWin32PerformanceCounterToTimeKHR func_xrConvertWin32PerformanceCounterToTimeKHR = nullptr;
+#else
+public:
+    PFN_xrGetVulkanGraphicsRequirementsKHR func_xrGetVulkanGraphicsRequirementsKHR = nullptr;
+    PFN_xrGetVulkanGraphicsDeviceKHR func_xrGetVulkanGraphicsDeviceKHR = nullptr;
+private:
+#endif
     PFN_xrCreateDebugUtilsMessengerEXT func_xrCreateDebugUtilsMessengerEXT = nullptr;
     PFN_xrDestroyDebugUtilsMessengerEXT func_xrDestroyDebugUtilsMessengerEXT = nullptr;
 };

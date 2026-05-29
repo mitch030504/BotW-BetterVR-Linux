@@ -1,4 +1,5 @@
 #include "pch.h"
+#ifdef _WIN32
 
 #include "renderer.h"
 #include "instance.h"
@@ -49,21 +50,22 @@ void RND_Renderer::StartFrame() {
     XrFrameWaitInfo waitFrameInfo = { XR_TYPE_FRAME_WAIT_INFO };
     auto waitStart = std::chrono::high_resolution_clock::now();
     checkXRResult(xrWaitFrame(m_session, &waitFrameInfo, &m_frameState), "Failed to wait for next frame!");
-    m_lastWaitTimeMs = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - waitStart).count();
+    m_lastWaitTimeMs.store(std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - waitStart).count(),
+                           std::memory_order_relaxed);
 
     // Runtime predicted cadence
-    m_predictedDisplayPeriodMs = (double)m_frameState.predictedDisplayPeriod / 1e6;
+    m_predictedDisplayPeriodMs.store((double)m_frameState.predictedDisplayPeriod / 1e6, std::memory_order_relaxed);
 
     // "Frame" as the runtime sees it: delta between predicted display times
-    if (m_lastPredictedDisplayTime != 0 && m_frameState.predictedDisplayTime > m_lastPredictedDisplayTime) {
-        const XrTime deltaNs = m_frameState.predictedDisplayTime - m_lastPredictedDisplayTime;
-        m_lastFrameTimeMs = (double)deltaNs / 1e6;
+    const XrTime previousDisplayTime = m_lastPredictedDisplayTime.exchange(m_frameState.predictedDisplayTime, std::memory_order_relaxed);
+    if (previousDisplayTime != 0 && m_frameState.predictedDisplayTime > previousDisplayTime) {
+        const XrTime deltaNs = m_frameState.predictedDisplayTime - previousDisplayTime;
+        m_lastFrameTimeMs.store((double)deltaNs / 1e6, std::memory_order_relaxed);
 
         // Overhead beyond the runtime cadence (missed interval / late frame, etc.)
-        const double overheadMs = m_lastFrameTimeMs - m_predictedDisplayPeriodMs;
-        m_lastOverheadMs = overheadMs > 0.0 ? overheadMs : 0.0;
+        const double overheadMs = ((double)deltaNs / 1e6) - ((double)m_frameState.predictedDisplayPeriod / 1e6);
+        m_lastOverheadMs.store(overheadMs > 0.0 ? overheadMs : 0.0, std::memory_order_relaxed);
     }
-    m_lastPredictedDisplayTime = m_frameState.predictedDisplayTime;
 
     m_frameStartTime = std::chrono::high_resolution_clock::now();
 
@@ -164,7 +166,8 @@ void RND_Renderer::EndFrame() {
         --m_cameraIsCapturing3DFrameBuffer;
     }
 
-    m_lastFrameWorkTimeMs = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - m_frameStartTime).count();
+    m_lastFrameWorkTimeMs.store(std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - m_frameStartTime).count(),
+                                std::memory_order_relaxed);
 
     XrFrameEndInfo frameEndInfo = { XR_TYPE_FRAME_END_INFO };
     frameEndInfo.displayTime = m_frameState.predictedDisplayTime;
@@ -576,3 +579,5 @@ std::vector<XrCompositionLayerQuad> RND_Renderer::Layer2D::FinishRendering(XrTim
 
     return layers;
 }
+
+#endif // _WIN32

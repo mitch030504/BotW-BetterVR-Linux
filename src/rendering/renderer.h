@@ -1,10 +1,14 @@
 #pragma once
 
+#include <shared_mutex>
 #include "pch.h"
+#ifdef _WIN32
 #include "d3d12.h"
+#endif
 #include "openxr.h"
 #include "swapchain.h"
 #include "texture.h"
+#include "utils/render_utils.h"
 #include "utils/debug_draw.h"
 
 class SharedTexture;
@@ -55,56 +59,81 @@ public:
     void StartFrame();
     void EndFrame();
     std::optional<std::array<XrView, 2>> UpdateViews(XrTime predictedDisplayTime);
-    
-    std::optional<std::array<XrView, 2>> GetPoses(long frameIdx = -1) const { 
+
+    // Backend-specific members: the per-frame capture entry points, the CurrentViews
+    // accessor, and (Windows) the Layer3D/Layer2D composition layers. Pure platform
+    // split — the bodies are identical to the previously-inline #ifdef members.
+#ifdef _WIN32
+#include "renderer_members_d3d12.inc"
+#else
+#include "renderer_members_vulkan.inc"
+#endif
+
+    std::optional<std::array<XrView, 2>> GetPoses(long frameIdx = -1) const {
         if (frameIdx != -1 && m_renderFrames[frameIdx].views.has_value()) return m_renderFrames[frameIdx].views;
-        return m_currViews; 
+        return CurrentViews();
     }
-    
-    std::optional<XrFovf> GetFOV(OpenXR::EyeSide side, long frameIdx = -1) const { 
-        const auto& views = (frameIdx != -1 && m_renderFrames[frameIdx].views.has_value()) ? m_renderFrames[frameIdx].views : m_currViews;
-        return views.transform([side](auto& views) { return views[side].fov; }); 
-    }
-    
-    std::optional<XrPosef> GetPose(OpenXR::EyeSide side, long frameIdx = -1) const { 
-        const auto& views = (frameIdx != -1 && m_renderFrames[frameIdx].views.has_value()) ? m_renderFrames[frameIdx].views : m_currViews;
-        return views.transform([side](auto& views) { return views[side].pose; }); 
-    }
-    
-    std::optional<glm::fmat4> GetPoseAsMatrix(OpenXR::EyeSide side, long frameIdx = -1) const {
-        const auto& views = (frameIdx != -1 && m_renderFrames[frameIdx].views.has_value()) ? m_renderFrames[frameIdx].views : m_currViews;
-        return views.transform([side](auto& views) {
-            const XrPosef& pose = views[side].pose;
-            return ToMat4(ToGLM(pose.position), ToGLM(pose.orientation));
-        });
-    };
-    
-    std::optional<glm::fmat4> GetMiddlePose(long frameIdx = -1) const {
-        const auto& views = (frameIdx != -1 && m_renderFrames[frameIdx].views.has_value()) ? m_renderFrames[frameIdx].views : m_currViews;
+
+    std::optional<XrFovf> GetFOV(OpenXR::EyeSide side, long frameIdx = -1) const {
+        if (frameIdx != -1 && m_renderFrames[frameIdx].views.has_value()) {
+            return m_renderFrames[frameIdx].views->at(side).fov;
+        }
+        auto views = CurrentViews();
         if (!views.has_value()) return std::nullopt;
-        const XrPosef& leftPose = views->at(OpenXR::EyeSide::LEFT).pose;
-        const XrPosef& rightPose = views->at(OpenXR::EyeSide::RIGHT).pose;
+        return views->at(side).fov;
+    }
+
+    std::optional<XrPosef> GetPose(OpenXR::EyeSide side, long frameIdx = -1) const {
+        if (frameIdx != -1 && m_renderFrames[frameIdx].views.has_value()) {
+            return m_renderFrames[frameIdx].views->at(side).pose;
+        }
+        auto views = CurrentViews();
+        if (!views.has_value()) return std::nullopt;
+        return views->at(side).pose;
+    }
+
+    std::optional<glm::fmat4> GetPoseAsMatrix(OpenXR::EyeSide side, long frameIdx = -1) const {
+        auto poseOpt = GetPose(side, frameIdx);
+        if (!poseOpt.has_value()) return std::nullopt;
+        return ToMat4(ToGLM(poseOpt->position), ToGLM(poseOpt->orientation));
+    };
+
+    std::optional<glm::fmat4> GetMiddlePose(long frameIdx = -1) const {
+        auto poses = GetPoses(frameIdx);
+        if (!poses.has_value()) return std::nullopt;
+        const XrPosef& leftPose = poses->at(OpenXR::EyeSide::LEFT).pose;
+        const XrPosef& rightPose = poses->at(OpenXR::EyeSide::RIGHT).pose;
         glm::fvec3 middlePos = (ToGLM(leftPose.position) + ToGLM(rightPose.position)) * 0.5f;
         glm::quat middleOri = glm::slerp(ToGLM(leftPose.orientation), ToGLM(rightPose.orientation), 0.5f);
 
         return ToMat4(middlePos, middleOri);
     };
 
-    double GetLastFrameWorkTimeMs() const { return m_lastFrameWorkTimeMs; }
-    double GetLastWaitTimeMs() const { return m_lastWaitTimeMs; }
-    double GetLastFrameTimeMs() const { return m_lastFrameTimeMs; }
-    double GetPredictedDisplayPeriodMs() const { return m_predictedDisplayPeriodMs; }
-    double GetLastOverheadMs() const { return m_lastOverheadMs; }
+    double GetLastFrameWorkTimeMs() const { return m_lastFrameWorkTimeMs.load(std::memory_order_relaxed); }
+    double GetLastWaitTimeMs() const { return m_lastWaitTimeMs.load(std::memory_order_relaxed); }
+    double GetLastFrameTimeMs() const { return m_lastFrameTimeMs.load(std::memory_order_relaxed); }
+    double GetPredictedDisplayPeriodMs() const { return m_predictedDisplayPeriodMs.load(std::memory_order_relaxed); }
+    double GetLastOverheadMs() const { return m_lastOverheadMs.load(std::memory_order_relaxed); }
 
     void On3DColorCopied(OpenXR::EyeSide side, long frameIdx) {
         m_renderFrames[frameIdx].copiedColor[side] = true;
-        if (!m_renderFrames[frameIdx].views.has_value()) m_renderFrames[frameIdx].views = m_currViews;
+        if (!m_renderFrames[frameIdx].views.has_value()) {
+#ifndef _WIN32
+            std::shared_lock lock(m_viewsMutex);
+#endif
+            m_renderFrames[frameIdx].views = m_currViews;
+        }
         DebugDraw::instance().SnapshotEyeState(side, frameIdx);
     }
 
     void On3DDepthCopied(OpenXR::EyeSide side, long frameIdx) {
         m_renderFrames[frameIdx].copiedDepth[side] = true;
-        if (!m_renderFrames[frameIdx].views.has_value()) m_renderFrames[frameIdx].views = m_currViews;
+        if (!m_renderFrames[frameIdx].views.has_value()) {
+#ifndef _WIN32
+            std::shared_lock lock(m_viewsMutex);
+#endif
+            m_renderFrames[frameIdx].views = m_currViews;
+        }
     }
 
     void On2DCopied(long frameIdx) {
@@ -113,72 +142,6 @@ public:
 
     RenderFrame& GetFrame(long frameIdx) { return m_renderFrames[frameIdx]; }
     const RenderFrame& GetFrame(long frameIdx) const { return m_renderFrames[frameIdx]; }
-
-    class Layer3D {
-    public:
-        explicit Layer3D(VkExtent2D inputRes, VkExtent2D outputRes);
-        ~Layer3D();
-
-        SharedTexture* CopyColorToLayer(OpenXR::EyeSide side, VkCommandBuffer copyCmdBuffer, VkImage image, long frameIdx);
-        SharedTexture* CopyDepthToLayer(OpenXR::EyeSide side, VkCommandBuffer copyCmdBuffer, VkImage image, long frameIdx);
-        void PrepareRendering(OpenXR::EyeSide side);
-        void StartRendering();
-        void Render(OpenXR::EyeSide side, long frameIdx, SharedTexture* fadeTexture, const DebugDrawRenderData& debugDrawData);
-        const std::array<XrCompositionLayerProjectionView, 2>& FinishRendering(long frameIdx);
-
-        float GetAspectRatio(OpenXR::EyeSide side) const { return m_recommendedAspectRatios[side]; }
-        const RenderUtils::UvTransform& GetPresentUvTransform(OpenXR::EyeSide side) const { return m_presentUvTransforms[side]; }
-        long GetCurrentFrameIdx() const { return m_currentFrameIdx; }
-        auto& GetSharedTextures() { return m_textures; }
-        auto& GetDepthSharedTextures() { return m_depthTextures; }
-
-    private:
-        std::array<std::unique_ptr<Swapchain<DXGI_FORMAT_R8G8B8A8_UNORM_SRGB>>, 2> m_swapchains;
-        std::array<std::unique_ptr<Swapchain<DXGI_FORMAT_D32_FLOAT>>, 2> m_depthSwapchains;
-        std::array<std::unique_ptr<RND_D3D12::PresentPipeline<true>>, 2> m_presentPipelines;
-        std::array<std::array<std::unique_ptr<SharedTexture>, 2>, 2> m_textures;
-        std::array<std::array<std::unique_ptr<SharedTexture>, 2>, 2> m_depthTextures;
-        std::array<float, 2> m_recommendedAspectRatios = { 1.0f, 1.0f };
-        std::array<RenderUtils::UvTransform, 2> m_presentUvTransforms = {};
-        std::unique_ptr<RND_D3D12::DebugDrawPipeline> m_debugDrawPipeline;
-
-        std::array<XrCompositionLayerProjectionView, 2> m_projectionViews = {};
-        std::array<XrCompositionLayerDepthInfoKHR, 2> m_projectionViewsDepthInfo = {};
-
-        long m_currentFrameIdx = 0;
-    };
-
-    class Layer2D {
-    public:
-        explicit Layer2D(VkExtent2D inputRes, VkExtent2D outputRes);
-        ~Layer2D();
-
-        SharedTexture* CopyColorToLayer(VkCommandBuffer copyCmdBuffer, VkImage image, long frameIdx);
-        // AMD GPU FIX: With incrementing values, Vulkan signals odd values (1,3,5...), D3D12 signals even values (2,4,6...)
-        // Texture is ready for D3D12 when Vulkan has signaled (odd value > 0)
-        bool IsTextureReady(long frameIdx) const {
-            uint64_t lastSignal = m_textures[frameIdx]->GetLastSignalledValue();
-            return lastSignal > 0 && (lastSignal % 2 == 1);
-        };
-        void StartRendering() const;
-        void Render(long frameIdx);
-        std::vector<XrCompositionLayerQuad> FinishRendering(XrTime predictedDisplayTime, long frameIdx);
-        long GetCurrentFrameIdx() const { return m_currentFrameIdx; }
-        auto& GetSharedTextures() { return m_textures; }
-
-        static void SetBowAimingActive(bool isActive) { s_isBowAimingActive = isActive; }
-        static bool IsBowAimingActive() { return s_isBowAimingActive; }
-
-    private:
-        static std::atomic_bool s_isBowAimingActive;
-        std::unique_ptr<Swapchain<DXGI_FORMAT_R8G8B8A8_UNORM_SRGB>> m_swapchain;
-        std::unique_ptr<RND_D3D12::PresentPipeline<false>> m_presentPipeline;
-        std::array<std::unique_ptr<SharedTexture>, 2> m_textures;
-
-        glm::quat m_currentOrientation = glm::identity<glm::fquat>();
-
-        long m_currentFrameIdx = 0;
-    };
 
     class ImGuiOverlay {
     public:
@@ -218,8 +181,6 @@ public:
         VkExtent2D m_outputRes = {};
     };
 
-    std::unique_ptr<Layer3D> m_layer3D;
-    std::unique_ptr<Layer2D> m_layer2D;
     std::unique_ptr<ImGuiOverlay> m_imguiOverlay;
     float m_gameRenderAspectRatio = 16.0f / 9.0f;
 
@@ -270,11 +231,14 @@ public:
 protected:
     XrSession m_session;
     XrFrameState m_frameState = { XR_TYPE_FRAME_STATE };
-    std::optional<std::array<XrView, 2>> m_currViews;
+    mutable std::optional<std::array<XrView, 2>> m_currViews;
     std::array<RenderFrame, 2> m_renderFrames;
 
     std::atomic_bool m_isInitialized = false;
     std::atomic_bool m_presented2DLastFrame = false;
+#ifndef _WIN32
+#include "renderer_state_vulkan.inc"
+#endif
     std::atomic_uint8_t m_cameraIsCapturing3DFrameBuffer = 0;
     std::atomic_bool m_isFadeActive = false;
     std::atomic<float> m_customFadeAmount = 0.0f;
@@ -283,15 +247,15 @@ protected:
     std::atomic<float> m_customFadeColorB = 0.0f;
 
     // Full-frame timing derived from OpenXR timestamps (XrTime is in nanoseconds)
-    XrTime m_lastPredictedDisplayTime = 0;
+    std::atomic<XrTime> m_lastPredictedDisplayTime = 0;
 
     std::chrono::high_resolution_clock::time_point m_frameStartTime;
 
-    double m_lastFrameWorkTimeMs = 0.0;
-    double m_lastWaitTimeMs = 0.0;
+    std::atomic<double> m_lastFrameWorkTimeMs = 0.0;
+    std::atomic<double> m_lastWaitTimeMs = 0.0;
 
     // Derived from OpenXR timestamps
-    double m_lastFrameTimeMs = 0.0;
-    double m_predictedDisplayPeriodMs = 0.0;
-    double m_lastOverheadMs = 0.0;
+    std::atomic<double> m_lastFrameTimeMs = 0.0;
+    std::atomic<double> m_predictedDisplayPeriodMs = 0.0;
+    std::atomic<double> m_lastOverheadMs = 0.0;
 };
