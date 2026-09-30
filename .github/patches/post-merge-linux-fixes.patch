@@ -84,18 +84,18 @@
          && VRManager::instance().XR->GetRenderer() != nullptr
 --- a/src/hooking/imgui_menus.cpp
 +++ b/src/hooking/imgui_menus.cpp
-@@ -10,6 +10,10 @@
+@@ -11,6 +11,10 @@
+ #include "utils/mod_settings.h"
  #include "weapon.h"
  #include "supporters_generated.h"
- 
++
 +#ifndef _WIN32
 +#include <sys/wait.h>
 +#endif
-+
+ 
  static constexpr ImVec4 kDescriptionColor = ImVec4(0.63f, 0.71f, 0.78f, 1.0f);
  static constexpr ImVec4 kSectionCaptionColor = ImVec4(0.40f, 0.66f, 1.0f, 1.0f);
- static constexpr ImVec4 kHintColor = ImVec4(0.35f, 0.95f, 0.45f, 1.0f);
-@@ -209,24 +213,45 @@
+@@ -209,13 +213,18 @@
  }
  
  void ImGuiMenus::OpenLinkInBrowser(const char* url) {
@@ -114,11 +114,7 @@
          HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
          INT_PTR shellResult = (INT_PTR)ShellExecuteA(nullptr, "open", link.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
          if (shellResult <= 32) {
-             Log::print<WARNING>("Failed to open {} in the default browser (error {})", link, shellResult);
-         }
-         else {
-             Log::print<INFO>("Opened {} in the default browser, it's behind the game window", link);
-         }
+@@ -227,6 +236,25 @@
          if (SUCCEEDED(comResult)) {
              CoUninitialize();
          }
