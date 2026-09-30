@@ -39,3 +39,13 @@
      }
  
      template <typename T>
+--- a/src/utils/logger.cpp
++++ b/src/utils/logger.cpp
+@@ -1,6 +1,7 @@
+ #include "pch.h"
+ 
+ #include "logger.h"
++#include <fstream>
+ 
+ #ifdef _WIN32
+ 
