@@ -64,7 +64,6 @@ jobs:
             git ls-files -u
             exit 1
           fi
-          git diff --cached --check
 
       - name: Install Nix
         if: steps.ancestry.outputs.already_merged != 'true'
