@@ -82,3 +82,65 @@
  
      const bool skipCollision = !keepCollision
          && VRManager::instance().XR->GetRenderer() != nullptr
+--- a/src/hooking/imgui_menus.cpp
++++ b/src/hooking/imgui_menus.cpp
+@@ -10,6 +10,10 @@
+ #include "weapon.h"
+ #include "supporters_generated.h"
+ 
++#ifndef _WIN32
++#include <sys/wait.h>
++#endif
++
+ static constexpr ImVec4 kDescriptionColor = ImVec4(0.63f, 0.71f, 0.78f, 1.0f);
+ static constexpr ImVec4 kSectionCaptionColor = ImVec4(0.40f, 0.66f, 1.0f, 1.0f);
+ static constexpr ImVec4 kHintColor = ImVec4(0.35f, 0.95f, 0.45f, 1.0f);
+@@ -209,24 +213,45 @@
+ }
+ 
+ void ImGuiMenus::OpenLinkInBrowser(const char* url) {
++#ifdef _WIN32
+     if (url == nullptr || (_strnicmp(url, "https://", 8) != 0 && _strnicmp(url, "http://", 7) != 0)) {
++#else
++    if (url == nullptr || (strncasecmp(url, "https://", 8) != 0 && strncasecmp(url, "http://", 7) != 0)) {
++#endif
+         Log::print<WARNING>("Refusing to open link that isn't a http(s) URL: {}", url != nullptr ? url : "(null)");
+         return;
+     }
+ 
+     // opening the browser can block for a while, so keep it off the render thread
+     std::thread([link = std::string(url)]() {
++#ifdef _WIN32
+         HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+         INT_PTR shellResult = (INT_PTR)ShellExecuteA(nullptr, "open", link.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+         if (shellResult <= 32) {
+             Log::print<WARNING>("Failed to open {} in the default browser (error {})", link, shellResult);
+         }
+         else {
+             Log::print<INFO>("Opened {} in the default browser, it's behind the game window", link);
+         }
+         if (SUCCEEDED(comResult)) {
+             CoUninitialize();
+         }
++#else
++        const pid_t child = fork();
++        if (child == 0) {
++            execlp("xdg-open", "xdg-open", link.c_str(), static_cast<char*>(nullptr));
++            _exit(127);
++        }
++        if (child < 0) {
++            Log::print<WARNING>("Failed to launch xdg-open for {}", link);
++            return;
++        }
++
++        int status = 0;
++        if (waitpid(child, &status, 0) < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
++            Log::print<WARNING>("xdg-open failed for {}", link);
++        }
++        else {
++            Log::print<INFO>("Opened {} in the default browser", link);
++        }
++#endif
+     }).detach();
+ }
+ 
