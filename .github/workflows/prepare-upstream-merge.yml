@@ -1,4 +1,4 @@
-name: Prepare upstream merge workspace
+name: Integrate and build upstream
 
 on:
   push:
@@ -6,10 +6,10 @@ on:
       - integration/upstream-0.9.23
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  prepare-merge:
+  integrate:
     runs-on: ubuntu-latest
     steps:
       - name: Check out integration branch
@@ -17,37 +17,66 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Configure Git
+      - name: Configure Git and fetch upstream
         run: |
           git config user.name "BetterVR Linux Integration"
           git config user.email "actions@users.noreply.github.com"
-
-      - name: Fetch Crementif upstream and attempt merge
-        id: merge
-        shell: bash
-        run: |
-          set +e
           git remote add crementif https://github.com/Crementif/BotW-BetterVR.git 2>/dev/null || true
           git fetch crementif main
-          git merge --no-ff --no-commit crementif/main
-          MERGE_RC=$?
-          echo "merge_rc=$MERGE_RC" >> "$GITHUB_OUTPUT"
-          git status --porcelain=v1 > MERGE_STATUS.txt
-          git diff --name-only --diff-filter=U > MERGE_CONFLICTS.txt
-          git diff --check > MERGE_DIFF_CHECK.txt 2>&1 || true
-          git log --oneline --decorate -20 > MERGE_LOG.txt
-          exit 0
 
-      - name: Package merge workspace
+      - name: Check whether upstream is already integrated
+        id: ancestry
         shell: bash
         run: |
-          tar --exclude=.git -czf /tmp/bettervr-upstream-merge-workspace.tar.gz .
-          cp /tmp/bettervr-upstream-merge-workspace.tar.gz .
+          if git merge-base --is-ancestor crementif/main HEAD; then
+            echo "already_merged=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_merged=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Upload merge workspace
-        uses: actions/upload-artifact@v4
-        with:
-          name: bettervr-upstream-merge-workspace
-          path: bettervr-upstream-merge-workspace.tar.gz
-          if-no-files-found: error
-          retention-days: 7
+      - name: Merge current Crementif main
+        if: steps.ancestry.outputs.already_merged != 'true'
+        shell: bash
+        run: |
+          git merge --no-ff --no-commit crementif/main || true
+
+      - name: Apply Linux integration resolution
+        if: steps.ancestry.outputs.already_merged != 'true'
+        shell: bash
+        run: |
+          base64 -d .github/patches/upstream-linux-integration.patch.gz.b64 | gzip -d > /tmp/upstream-linux-integration.patch
+          patch -p1 --batch < /tmp/upstream-linux-integration.patch
+
+          if grep -RIl '^<<<<<<< HEAD$' src include CMakeLists.txt CMakePresets.json 2>/dev/null | grep -q .; then
+            echo "Unresolved HEAD conflict markers remain"
+            grep -RIn '^<<<<<<< HEAD$' src include CMakeLists.txt CMakePresets.json || true
+            exit 1
+          fi
+          if grep -RIl '^>>>>>>> crementif/main$' src include CMakeLists.txt CMakePresets.json 2>/dev/null | grep -q .; then
+            echo "Unresolved upstream conflict markers remain"
+            grep -RIn '^>>>>>>> crementif/main$' src include CMakeLists.txt CMakePresets.json || true
+            exit 1
+          fi
+
+          git add -A
+          if git ls-files -u | grep -q .; then
+            echo "Unmerged index entries remain:"
+            git ls-files -u
+            exit 1
+          fi
+          git diff --cached --check
+
+      - name: Install Nix
+        if: steps.ancestry.outputs.already_merged != 'true'
+        uses: cachix/install-nix-action@v31
+
+      - name: Build native Linux BetterVR
+        if: steps.ancestry.outputs.already_merged != 'true'
+        run: nix build . --no-link --print-build-logs
+
+      - name: Commit resolved upstream merge
+        if: steps.ancestry.outputs.already_merged != 'true'
+        shell: bash
+        run: |
+          git commit -m "Merge Crementif upstream 0.9.23 into Linux port"
+          git push origin HEAD:integration/upstream-0.9.23
