@@ -49,3 +49,36 @@
  
  #ifdef _WIN32
  
+--- a/src/hooking/camera.cpp
++++ b/src/hooking/camera.cpp
+@@ -6,6 +6,7 @@
+ #include "utils/debug_draw.h"
+ #include "utils/game_utils.h"
+ #include "utils/render_utils.h"
++#include <cstdlib>
+ 
+ bool CemuHooks::UseMonoFrameBufferTemporarilyDuringMenusOrPictures() {
+     auto* renderer = VRManager::instance().XR->GetRenderer();
+@@ -44,10 +45,6 @@
+     Log::print<RENDERING>("{0} {0} {0} {0} {0} {0} {0} {0} {0} {0} {0} {0} {0} {0} {0} {0} {0} {0}", side);
+ }
+ 
+-bool CemuHooks::UseMonoFrameBufferTemporarilyDuringMenusOrPictures() {
+-    return !IsAnyFadeScreenVisible() && (IsFlatCameraModeActive() || IsScreenOpen(ScreenId::PauseMenuInfo_00) || VRManager::instance().XR->GetRenderer()->IsGameCapturing3DFrameBuffer());
+-}
+-
+ // Write a frustum into a sead::PerspectiveProjection: the scalars the game reads back, the
+ // projection matrix, and the device matrix its depth range is folded into. zNear/zFar are taken
+ // from the projection as it stands, so the caller decides whether to keep the game's clip planes
+@@ -1185,7 +1182,11 @@
+ void CemuHooks::hook_SkipCameraCollision(PPCInterpreter_t* hCPU) {
+     hCPU->instructionPointer = hCPU->sprNew.LR;
+ 
++#ifdef _WIN32
+     static const bool keepCollision = GetEnvironmentVariableA("BETTERVR_KEEP_CAMERA_COLLISION", nullptr, 0) != 0;
++#else
++    static const bool keepCollision = std::getenv("BETTERVR_KEEP_CAMERA_COLLISION") != nullptr;
++#endif
+ 
+     const bool skipCollision = !keepCollision
+         && VRManager::instance().XR->GetRenderer() != nullptr
