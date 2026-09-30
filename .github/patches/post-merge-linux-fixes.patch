@@ -14,3 +14,28 @@
  template<typename T>
  struct BEType {
      using betype_tag = void;
+--- a/src/hooking/cemu_hooks.h
++++ b/src/hooking/cemu_hooks.h
+@@ -361,17 +361,11 @@
+     }
+ 
+     template <typename T>
+-    static auto getMemory(uint64_t offset) {
+-        if constexpr (is_BEType_v<T>) {
+-            T result;
+-            readMemory(offset, &result);
+-            return result;
+-        }
+-        else {
+-            BEType<T> result;
+-            readMemory(offset, &result);
+-            return result;
+-        }
++    static std::conditional_t<is_BEType_v<T>, T, BEType<T>> getMemory(uint64_t offset) {
++        using Result = std::conditional_t<is_BEType_v<T>, T, BEType<T>>;
++        Result result;
++        readMemory(offset, &result);
++        return result;
+     }
+ 
+     template <typename T>
