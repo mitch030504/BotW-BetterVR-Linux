@@ -1,0 +1,53 @@
+name: Prepare upstream merge workspace
+
+on:
+  push:
+    branches:
+      - integration/upstream-0.9.23
+
+permissions:
+  contents: read
+
+jobs:
+  prepare-merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out integration branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "BetterVR Linux Integration"
+          git config user.email "actions@users.noreply.github.com"
+
+      - name: Fetch Crementif upstream and attempt merge
+        id: merge
+        shell: bash
+        run: |
+          set +e
+          git remote add crementif https://github.com/Crementif/BotW-BetterVR.git 2>/dev/null || true
+          git fetch crementif main
+          git merge --no-ff --no-commit crementif/main
+          MERGE_RC=$?
+          echo "merge_rc=$MERGE_RC" >> "$GITHUB_OUTPUT"
+          git status --porcelain=v1 > MERGE_STATUS.txt
+          git diff --name-only --diff-filter=U > MERGE_CONFLICTS.txt
+          git diff --check > MERGE_DIFF_CHECK.txt 2>&1 || true
+          git log --oneline --decorate -20 > MERGE_LOG.txt
+          exit 0
+
+      - name: Package merge workspace
+        shell: bash
+        run: |
+          tar --exclude=.git -czf /tmp/bettervr-upstream-merge-workspace.tar.gz .
+          cp /tmp/bettervr-upstream-merge-workspace.tar.gz .
+
+      - name: Upload merge workspace
+        uses: actions/upload-artifact@v4
+        with:
+          name: bettervr-upstream-merge-workspace
+          path: bettervr-upstream-merge-workspace.tar.gz
+          if-no-files-found: error
+          retention-days: 7
