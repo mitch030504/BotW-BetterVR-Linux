@@ -1,0 +1,16 @@
+--- a/include/pch.h
++++ b/include/pch.h
+@@ -258,6 +258,13 @@
+ 
+ #pragma pack(push, 1)
+ 
++// Upstream game structs still use this marker as an empty base. Keep the
++// Linux zero-layout betype_tag detection while providing compatibility for
++// newly-added upstream structures such as sead::Buffer and ASListSlot.
++struct BETypeCompatible {
++    using betype_tag = void;
++};
++
+ template<typename T>
+ struct BEType {
+     using betype_tag = void;
