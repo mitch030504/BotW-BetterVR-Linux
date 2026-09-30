@@ -46,8 +46,41 @@ jobs:
         run: |
           base64 -d .github/patches/upstream-linux-integration.patch.gz.b64 | gzip -d > /tmp/upstream-linux-integration.patch
           patch -p1 --batch < /tmp/upstream-linux-integration.patch
+          patch -p1 --batch < .github/patches/post-merge-linux-fixes.patch
 
-          if grep -RIl '^<<<<<<< HEAD$' src include CMakeLists.txt CMakePresets.json 2>/dev/null | grep -q .; then
+          if grep -RIl '^<<<<<<< HEAD src include CMakeLists.txt CMakePresets.json 2>/dev/null | grep -q .; then
+            echo "Unresolved HEAD conflict markers remain"
+            grep -RIn '^<<<<<<< HEAD$' src include CMakeLists.txt CMakePresets.json || true
+            exit 1
+          fi
+          if grep -RIl '^>>>>>>> crementif/main$' src include CMakeLists.txt CMakePresets.json 2>/dev/null | grep -q .; then
+            echo "Unresolved upstream conflict markers remain"
+            grep -RIn '^>>>>>>> crementif/main$' src include CMakeLists.txt CMakePresets.json || true
+            exit 1
+          fi
+
+          git add -A
+          if git ls-files -u | grep -q .; then
+            echo "Unmerged index entries remain:"
+            git ls-files -u
+            exit 1
+          fi
+
+      - name: Install Nix
+        if: steps.ancestry.outputs.already_merged != 'true'
+        uses: cachix/install-nix-action@v31
+
+      - name: Build native Linux BetterVR
+        if: steps.ancestry.outputs.already_merged != 'true'
+        run: nix build . --no-link --print-build-logs
+
+      - name: Commit resolved upstream merge
+        if: steps.ancestry.outputs.already_merged != 'true'
+        shell: bash
+        run: |
+          git commit -m "Merge Crementif upstream 0.9.23 into Linux port"
+          git push origin HEAD:integration/upstream-0.9.23
+ src include CMakeLists.txt CMakePresets.json 2>/dev/null | grep -q .; then
             echo "Unresolved HEAD conflict markers remain"
             grep -RIn '^<<<<<<< HEAD$' src include CMakeLists.txt CMakePresets.json || true
             exit 1
